@@ -9,18 +9,18 @@ mod audio_loader;
 
 // --- IMPORTS from our modules ---
 use crate::audio_loader::load_audio_file;
-use crate::database::{enroll_song, query_db_and_match, FingerprintDB, Song, MatchResult}; // Added MatchResult
+use crate::database::{enroll_song, query_db_and_match, FingerprintDB, Song}; // Added MatchResult
 use crate::hashing::{create_hashes, MAX_PAIRS_PER_ANCHOR, TARGET_ZONE_DF_ABS_MAX_BINS, TARGET_ZONE_DT_MAX_FRAMES, TARGET_ZONE_DT_MIN_FRAMES};
 use crate::peaks::find_peaks;
 use crate::spectrogram::create_spectrogram;
 
 // --- Standard Library and Other IMPORTS ---
 use std::collections::HashMap;
-use std::f32::consts::PI; // Keep PI if you decide to add back dummy generation for quick tests
+ // Keep PI if you decide to add back dummy generation for quick tests
 use std::path::Path;
 
 // --- GLOBAL CONSTANTS ---
-const SAMPLE_RATE: u32 = 48000;
+const SAMPLE_RATE: u32 = 22050;
 const FFT_WINDOW_SIZE: usize = 2048;
 const FFT_HOPSIZE: usize = 1024;
 

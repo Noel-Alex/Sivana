@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 rustfft = "6.3.0"
 symphonia = { version = "0.5.3", features = ["all-formats", "all-codecs"] }
+rubato = "0.16.2"
