@@ -3,7 +3,6 @@
 pub struct Peak { // Made public
     pub time_idx: usize,     // Fields also public
     pub freq_bin_idx: usize,
-    pub magnitude: f32,
 }
 
 pub fn find_peaks( // Made public
@@ -68,7 +67,6 @@ pub fn find_peaks( // Made public
                 peaks.push(Peak {
                     time_idx: t_idx,
                     freq_bin_idx: f_idx,
-                    magnitude: current_magnitude,
                 });
             }
         }
