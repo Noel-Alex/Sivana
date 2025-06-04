@@ -26,3 +26,4 @@ target/
 /target
 data/
 sivana_fingerprints.sqlite
+test/

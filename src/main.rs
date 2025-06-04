@@ -7,39 +7,72 @@ mod hashing;
 mod database;
 mod audio_loader;
 
-// --- IMPORTS from our modules ---
+// --- IMPORTS ---
 use crate::audio_loader::load_audio_file;
-// Import the new DB functions and necessary structs/types
 use crate::database::{
-    open_db_connection, init_db, enroll_song, query_db_and_match,
-    SongId, MatchResult
+    open_db_connection, init_db, enroll_song, query_db_and_match, get_song_info,
+    SongId, // MatchResult is used internally by query_db_and_match
 };
 use crate::hashing::{create_hashes, MAX_PAIRS_PER_ANCHOR, TARGET_ZONE_DF_ABS_MAX_BINS, TARGET_ZONE_DT_MAX_FRAMES, TARGET_ZONE_DT_MIN_FRAMES};
 use crate::peaks::find_peaks;
 use crate::spectrogram::create_spectrogram;
 
-// --- Standard Library and Other IMPORTS ---
-use std::collections::HashMap;
-use std::path::Path;
+use std::path::PathBuf; // For path arguments from clap
+use clap::Parser;     // For CLI argument parsing
 
 // --- GLOBAL CONSTANTS ---
 const SAMPLE_RATE: u32 = 22050;
 const FFT_WINDOW_SIZE: usize = 2048;
 const FFT_HOPSIZE: usize = 1024;
 
+// --- Define CLI Arguments and Subcommands ---
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Sivana Audio Fingerprinter", long_about = None)]
+#[command(propagate_version = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Parser, Debug)]
+enum Commands {
+    /// Enroll a new song into the fingerprint database
+    Enroll {
+        /// Path to the audio file to enroll
+        #[arg(value_name = "FILE_PATH")]
+        file_path: PathBuf,
+
+        /// Optional display name/title for the song. If not provided, filename is used.
+        #[arg(long, short)]
+        title: Option<String>,
+    },
+    /// Query the database with an audio snippet to identify a song
+    Query {
+        /// Path to the audio snippet file
+        #[arg(value_name = "SNIPPET_PATH")]
+        snippet_path: PathBuf,
+    },
+    /// List all songs currently enrolled in the database
+    List,
+    // TODO: Consider adding DeleteSong, DbInfo, ClearDb commands later
+}
+
 // --- MAIN FUNCTION ---
 fn main() -> Result<(), String> {
-    println!("Sivana Audio Fingerprinter - Persistent DB Mode - Testing with 11 Songs");
+    let cli_args = Cli::parse();
 
-    // --- Initialize Database Connection ---
-    // Make conn mutable so we can pass &mut conn to enroll_song
-    let mut conn = open_db_connection() // <<< CHANGED: let conn -> let mut conn
+    // --- Initialize Database Connection (common to most commands) ---
+    // Make conn mutable as enroll_song needs it
+    let mut conn = open_db_connection()
         .map_err(|e| format!("Failed to open/create database: {}", e))?;
-    init_db(&conn) // init_db takes &Connection, this is fine
+
+    // init_db should be safe to call every time; it uses "IF NOT EXISTS"
+    init_db(&conn)
         .map_err(|e| format!("Failed to initialize database tables: {}", e))?;
 
-    // --- Parameters ---
-    let spec_peak_params = (2, 5, 2.0f32);
+    // --- Parameters (could be loaded from config or become CLI options later) ---
+    let spec_peak_params = (2, 5, 2.0f32); // (time_radius, freq_radius, min_magnitude_threshold)
     let hashing_params = (
         TARGET_ZONE_DT_MIN_FRAMES,
         TARGET_ZONE_DT_MAX_FRAMES,
@@ -47,185 +80,158 @@ fn main() -> Result<(), String> {
         MAX_PAIRS_PER_ANCHOR,
     );
 
-    // --- List of Songs to Process (UPDATE THESE PATHS AND DESCRIPTIONS) ---
-    let song_processing_list = vec![
-        ("data/1.mp3", "Song 01 - [Artist A - Title X]"),
-        ("data/2.mp3", "Song 02 - [Artist A - Title Y]"),
-        ("data/3.mp3", "Song 03 - [Artist B - Title Z]"),
-        ("data/4.mp3", "Song 04 - [Artist C - Title P]"),
-        ("data/5.mp3", "Song 05 - [Artist D - Title Q]"),
-        ("data/6.mp3", "Song 06 - [Artist E - Title R]"),
-        ("data/7.mp3", "Song 07 - [Artist F - Title S]"),
-        ("data/8.mp3", "Song 08 - [Artist G - Title T]"),
-        ("data/9.mp3", "Song 09 - [Artist H - Title U]"),
-        ("data/10.mp3", "Song 10 - [Artist I - Title V]"),
-        ("data/11.mp3", "Song 11 - [Artist J - Title W]"),
-    ];
+    // Match on the parsed subcommand
+    match cli_args.command {
+        Commands::Enroll { file_path, title } => {
+            println!("Enroll command received for: {}", file_path.display());
 
-    if song_processing_list.len() != 11 {
-        println!("Warning: Expected 11 songs in song_processing_list, found {}. Please update the list.", song_processing_list.len());
-    }
+            if !file_path.exists() {
+                return Err(format!("Enroll error: File not found at '{}'", file_path.display()));
+            }
 
-    let mut enrolled_song_data: Vec<(SongId, String, Vec<f32>)> = Vec::new();
+            let song_name = title.unwrap_or_else(|| {
+                file_path.file_stem()
+                    .unwrap_or_default() // Use empty string if no stem
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            let file_path_str = file_path.to_str()
+                .ok_or_else(|| format!("Invalid file path string for: {}", file_path.display()))?;
 
-    // --- Enroll All Songs ---
-    println!("\n--- Starting Song Enrollment Process ---");
-    for (path_str, display_name) in &song_processing_list {
-        println!("\n--- Processing enrollment for: '{}' ---", display_name);
+            match load_audio_file(&file_path, SAMPLE_RATE) {
+                Ok(samples) => {
+                    if samples.is_empty() {
+                        return Err(format!("No audio samples loaded from '{}'. File might be empty, unsupported, or corrupted.", file_path.display()));
+                    }
+                    println!("Loaded {} samples for '{}'.", samples.len(), song_name);
 
-        let song_path = Path::new(path_str);
-        if !song_path.exists() {
-            eprintln!("!ERROR: Audio file '{}' not found. Skipping.", path_str);
-            continue;
-        }
-
-        match load_audio_file(song_path, SAMPLE_RATE) {
-            Ok(samples) => {
-                if samples.is_empty() {
-                    eprintln!("!ERROR: No samples loaded for '{}'. Skipping.", display_name);
-                    continue;
+                    match enroll_song(
+                        &mut conn, // Pass mutable connection
+                        &song_name,
+                        Some(file_path_str),
+                        &samples,
+                        SAMPLE_RATE, FFT_WINDOW_SIZE, FFT_HOPSIZE,
+                        spec_peak_params, hashing_params
+                    ) {
+                        Ok(db_song_id) => {
+                            println!("Successfully enrolled '{}' with DB Song ID: {}.", song_name, db_song_id);
+                            println!("File path stored: {}", file_path_str);
+                        }
+                        Err(e) => {
+                            return Err(format!("Error during enrollment process for '{}': {}", song_name, e));
+                        }
+                    }
                 }
-                println!("Loaded {} samples for '{}'.", samples.len(), display_name);
+                Err(e) => {
+                    return Err(format!("Error loading audio file '{}': {}", file_path.display(), e));
+                }
+            }
+        }
+        Commands::Query { snippet_path } => {
+            println!("Query command received for snippet: {}", snippet_path.display());
 
-                match enroll_song(
-                    &mut conn, // <<< CHANGED: Pass &mut conn
-                    display_name,
-                    Some(path_str),
-                    &samples,
-                    SAMPLE_RATE, FFT_WINDOW_SIZE, FFT_HOPSIZE,
-                    spec_peak_params, hashing_params
-                ) {
-                    Ok(db_song_id) => {
-                        println!("Successfully enrolled '{}' with DB Song ID: {}", display_name, db_song_id);
-                        enrolled_song_data.push((db_song_id, display_name.to_string(), samples));
+            if !snippet_path.exists() {
+                return Err(format!("Query error: Snippet file not found at '{}'", snippet_path.display()));
+            }
+
+            match load_audio_file(&snippet_path, SAMPLE_RATE) {
+                Ok(query_samples) => {
+                    if query_samples.is_empty() {
+                        return Err(format!("No audio samples loaded from snippet '{}'.", snippet_path.display()));
+                    }
+                    println!("Loaded {} samples for query snippet.", query_samples.len());
+
+                    let query_spectrogram = create_spectrogram(&query_samples, SAMPLE_RATE, FFT_WINDOW_SIZE, FFT_HOPSIZE);
+                    if query_spectrogram.is_empty() { println!("Warning: Query spectrogram is empty. This might lead to no match."); }
+
+                    let query_peaks = find_peaks(&query_spectrogram, spec_peak_params.0, spec_peak_params.1, spec_peak_params.2);
+                    if query_peaks.is_empty() { println!("Warning: No peaks found in query snippet. This might lead to no match."); }
+
+                    let query_fingerprints = create_hashes(&query_peaks, hashing_params.0, hashing_params.1, hashing_params.2, hashing_params.3);
+                    if query_fingerprints.is_empty() { println!("Warning: No fingerprints generated for query snippet. This might lead to no match."); }
+                    println!("Generated {} fingerprints for query snippet.", query_fingerprints.len());
+
+                    if query_fingerprints.is_empty() {
+                        println!("\n======= NO FINGERPRINTS GENERATED FOR QUERY, CANNOT MATCH =======");
+                        return Ok(());
+                    }
+
+                    if let Some(match_result) = query_db_and_match(&conn, &query_fingerprints) {
+                        println!("\n======= MATCH FOUND! =======");
+
+                        // Fetch full song info for better display
+                        match get_song_info(&conn, match_result.song_id) {
+                            Ok(Some(song_info)) => {
+                                println!("Matched Song ID: {}", song_info.id);
+                                println!("Matched Song Name: {}", song_info.name);
+                                if let Some(path) = song_info.file_path {
+                                    println!("Original File Path: {}", path);
+                                }
+                            }
+                            Ok(None) => {
+                                println!("Matched Song ID: {} (but metadata not found in 'songs' table!)", match_result.song_id);
+                            }
+                            Err(e) => {
+                                println!("Matched Song ID: {} (error fetching full info: {})", match_result.song_id, e);
+                            }
+                        }
+
+                        println!("Match Score: {}", match_result.score);
+                        println!("Calculated Time Offset in Song (frames): {}", match_result.time_offset_in_song_frames);
+                        let offset_seconds = (match_result.time_offset_in_song_frames as f32 * FFT_HOPSIZE as f32) / SAMPLE_RATE as f32;
+                        println!("(Approx. offset in matched song: {:.2} seconds)", offset_seconds);
+
+                    } else {
+                        println!("\n======= NO MATCH FOUND =======");
+                    }
+                }
+                Err(e) => {
+                    return Err(format!("Error loading audio snippet '{}': {}", snippet_path.display(), e));
+                }
+            }
+        }
+        Commands::List => {
+            println!("\n--- Enrolled Songs in Database ---");
+            let mut stmt = conn.prepare("SELECT song_id, name, file_path, enrolled_at FROM songs ORDER BY name ASC")
+                .map_err(|e| format!("Failed to prepare statement to list songs: {}", e))?;
+
+            let song_iter = stmt.query_map([], |row| {
+                // Directly use database::Song if its fields match and it's pub
+                Ok(crate::database::Song {
+                    id: row.get::<_, i64>(0)? as SongId, // Assuming SongId is u32
+                    name: row.get(1)?,
+                    file_path: row.get(2)?,
+                    // enrolled_at: row.get(3)?, // Needs chrono feature for rusqlite for DATETIME
+                })
+            }).map_err(|e| format!("Failed to query songs: {}", e))?;
+
+            let mut count = 0;
+            for song_result in song_iter {
+                match song_result {
+                    Ok(song) => {
+                        count += 1;
+                        print!("ID: {:<4} | Name: {:<40} | Path: ", song.id, song.name);
+                        if let Some(path) = song.file_path {
+                            print!("{}", path);
+                        } else {
+                            print!("N/A");
+                        }
+                        // To print enrolled_at, you'd need to handle its type (likely String or a DateTime type if using chrono)
+                        // println!(" | Enrolled: {}", row.get::<_, String>(3)?);
+                        println!(); // Newline
                     }
                     Err(e) => {
-                        eprintln!("!ERROR enrolling '{}': {}", display_name, e);
+                        eprintln!("Error fetching song row: {}", e);
                     }
                 }
             }
-            Err(e) => {
-                eprintln!("!ERROR loading '{}' from path '{}': {}", display_name, path_str, e);
+            if count == 0 {
+                println!("No songs found in the database.");
+            } else {
+                println!("--- Listed {} songs. ---", count);
             }
         }
     }
-    println!("\n--- All Enrollments Attempted ---");
-    match conn.query_row("SELECT COUNT(*) FROM songs", [], |row| row.get::<_, i64>(0)) {
-        Ok(count) => println!("Total songs in DB 'songs' table: {}", count),
-        Err(e) => println!("Could not get song count from DB: {}", e),
-    }
 
-    if enrolled_song_data.is_empty() {
-        return Err("No songs were successfully loaded and enrolled in this session. Aborting tests.".to_string());
-    }
-
-    // --- Define Queries ---
-    #[derive(Debug)]
-    struct QueryTest<'a> {
-        query_source_song_idx: usize,
-        expected_match_song_idx: usize,
-        description: &'a str,
-        snippet_start_seconds: f32,
-        snippet_duration_seconds: f32,
-    }
-
-    let queries_to_run = vec![
-        QueryTest { query_source_song_idx: 0, expected_match_song_idx: 0, description: "Snippet from Song 01 (idx 0)", snippet_start_seconds: 30.0, snippet_duration_seconds: 10.0 },
-        QueryTest { query_source_song_idx: 1, expected_match_song_idx: 1, description: "Snippet from Song 02 (idx 1)", snippet_start_seconds: 45.0, snippet_duration_seconds: 7.0 },
-        QueryTest { query_source_song_idx: 2, expected_match_song_idx: 2, description: "Snippet from Song 03 (idx 2)", snippet_start_seconds: 60.0, snippet_duration_seconds: 10.0 },
-        // Add queries for idx 3 through 10 if you have 11 songs and they all enrolled successfully
-        // Example: QueryTest { query_source_song_idx: 10, expected_match_song_idx: 10, description: "Snippet from Song 11 (idx 10)", snippet_start_seconds: 55.0, snippet_duration_seconds: 5.0 },
-    ];
-
-    // --- Run All Queries ---
-    for test_query in &queries_to_run {
-        let (query_db_song_id, query_song_name, source_samples) =
-            match enrolled_song_data.get(test_query.query_source_song_idx) {
-                Some(data) => (data.0, &data.1, &data.2),
-                None => {
-                    eprintln!("!WARNING: Query source index {} is out of bounds for enrolled songs ({} available). Skipping query: '{}'.",
-                              test_query.query_source_song_idx, enrolled_song_data.len(), test_query.description);
-                    continue;
-                }
-            };
-
-        let expected_db_song_id =
-            match enrolled_song_data.get(test_query.expected_match_song_idx) {
-                Some(data) => data.0,
-                None => {
-                    eprintln!("!WARNING: Expected match index {} is out of bounds for enrolled songs. Cannot determine expected DB ID for query: '{}'. Skipping.",
-                              test_query.expected_match_song_idx, test_query.description);
-                    continue;
-                }
-            };
-
-        println!("\n--- RUNNING QUERY: {} (Source: '{}' [DB ID {}], Expected Match: Song at idx {} [DB ID {}]) ---",
-                 test_query.description, query_song_name, query_db_song_id,
-                 test_query.expected_match_song_idx, expected_db_song_id);
-
-        let slice_start_sample_offset = (SAMPLE_RATE as f32 * test_query.snippet_start_seconds) as usize;
-        let slice_end_sample_offset = slice_start_sample_offset + (SAMPLE_RATE as f32 * test_query.snippet_duration_seconds) as usize;
-        let frame_offset_approx_for_query = slice_start_sample_offset / FFT_HOPSIZE;
-
-        if slice_start_sample_offset >= source_samples.len() { eprintln!("!WARNING: Query slice start for '{}' ... Skipping.", test_query.description); continue; }
-        let actual_slice_end = slice_end_sample_offset.min(source_samples.len());
-        if slice_start_sample_offset >= actual_slice_end { eprintln!("!WARNING: Query slice for '{}' would be empty. Skipping.", test_query.description); continue; }
-        let query_audio_slice = &source_samples[slice_start_sample_offset..actual_slice_end];
-        if query_audio_slice.is_empty() { eprintln!("!WARNING: Query audio slice for '{}' is empty. Skipping.", test_query.description); continue; }
-
-        println!("Query snippet: {} samples, approx frame offset {}.", query_audio_slice.len(), frame_offset_approx_for_query);
-        let query_spectrogram = create_spectrogram(query_audio_slice, SAMPLE_RATE, FFT_WINDOW_SIZE, FFT_HOPSIZE);
-        if query_spectrogram.is_empty() { println!("Warning: Query spectrogram empty for '{}'.", test_query.description); }
-        let query_peaks = find_peaks(&query_spectrogram, spec_peak_params.0, spec_peak_params.1, spec_peak_params.2);
-        if query_peaks.is_empty() { println!("Warning: No peaks in query for '{}'.", test_query.description); }
-        let query_fingerprints = create_hashes(&query_peaks, hashing_params.0, hashing_params.1, hashing_params.2, hashing_params.3);
-        if query_fingerprints.is_empty() { println!("Warning: No fingerprints for query for '{}'.", test_query.description); }
-        println!("Generated {} fingerprints for query '{}'.", query_fingerprints.len(), test_query.description);
-
-        if query_fingerprints.is_empty() {
-            println!("\n======= NO FINGERPRINTS GENERATED FOR QUERY '{}' =======", test_query.description);
-            if enrolled_song_data.iter().any(|(id, _, _)| *id == expected_db_song_id) {
-                println!("##### VERDICT: POTENTIAL FALSE NEGATIVE (No query fingerprints to match with an enrolled song) #####");
-            } else {
-                println!("##### VERDICT: CORRECTLY NO MATCH (Query yielded no fingerprints, expected song not enrolled/available) #####");
-            }
-            continue;
-        }
-
-        if let Some(match_result) = query_db_and_match(&conn, &query_fingerprints) { // Pass &conn (immutable)
-            println!("\n======= MATCH RESULT FOR '{}' =======", test_query.description);
-            let matched_song_name_from_db = database::get_song_info(&conn, match_result.song_id)
-                .ok().flatten()
-                .map_or_else(|| format!("Unknown DB Song ID {}", match_result.song_id), |s| s.name);
-
-            println!("Matched Song DB ID: {} (Expected DB ID: {})", match_result.song_id, expected_db_song_id);
-            println!("Matched Song Name: {}", matched_song_name_from_db);
-            println!("Match Score: {}", match_result.score);
-            println!("Calculated Time Offset in Song (frames): {}", match_result.time_offset_in_song_frames);
-            println!("(Query snippet started approx {} frames into source at {} seconds)", frame_offset_approx_for_query, test_query.snippet_start_seconds);
-
-            if match_result.song_id == expected_db_song_id {
-                println!("##### VERDICT: CORRECT MATCH! #####");
-            } else {
-                let expected_song_name_from_list = enrolled_song_data.iter()
-                    .find(|(id,_,_)| *id == expected_db_song_id)
-                    .map_or("Unknown expected song", |(_,name,_)| name.as_str());
-                println!("##### VERDICT: INCORRECT MATCH! (Expected '{}' [DB ID {}], Got '{}' [DB ID {}]) #####",
-                         expected_song_name_from_list, expected_db_song_id,
-                         matched_song_name_from_db, match_result.song_id);
-            }
-        } else {
-            println!("\n======= NO MATCH FOUND FOR '{}' =======", test_query.description);
-            if enrolled_song_data.iter().any(|(id, _, _)| *id == expected_db_song_id) {
-                let expected_song_name_from_list = enrolled_song_data.iter()
-                    .find(|(id,_,_)| *id == expected_db_song_id)
-                    .map_or("Unknown expected song", |(_,name,_)| name.as_str());
-                println!("##### VERDICT: POTENTIAL FALSE NEGATIVE (Expected to find '{}' [DB ID {}]) #####", expected_song_name_from_list, expected_db_song_id);
-            } else {
-                println!("##### VERDICT: CORRECTLY NO MATCH (Expected song not enrolled/available or query had no fingerprints) #####");
-            }
-        }
-    }
-    println!("\n--- All Queries Processed ---");
     Ok(())
 }
