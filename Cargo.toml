@@ -1,0 +1,11 @@
+[package]
+name = "Sivana"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustfft = "6.3.0"
+symphonia = { version = "0.5.3", features = ["all-formats", "all-codecs"] }
+rubato = "0.16.2"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+clap = { version = "4.5.4", features = ["derive"] }
