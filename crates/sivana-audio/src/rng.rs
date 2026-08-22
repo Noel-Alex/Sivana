@@ -76,7 +76,9 @@ mod tests {
         for _ in 0..10_000 {
             let v = rng.next_f32();
             assert!((0.0..1.0).contains(&v));
-            if v > 0.999 { any_high = true; }
+            if v > 0.999 {
+                any_high = true;
+            }
         }
         assert!(any_high, "generator appears stuck");
     }

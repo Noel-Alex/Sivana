@@ -27,3 +27,6 @@ target/
 data/
 sivana_fingerprints.sqlite
 test/
+
+# benchmark outputs
+bench-work/

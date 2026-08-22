@@ -56,7 +56,11 @@ pub fn mix_at_snr(signal: &[f32], noise: &[f32], snr_db: f32) -> Vec<f32> {
     let sig_rms = crate::level::rms(&signal[..n]);
     let noise_rms = crate::level::rms(&noise[..n]);
     let target_noise_rms = sig_rms / 10f32.powf(snr_db / 20.0);
-    let gain = if noise_rms > 1e-9 { target_noise_rms / noise_rms } else { 0.0 };
+    let gain = if noise_rms > 1e-9 {
+        target_noise_rms / noise_rms
+    } else {
+        0.0
+    };
     signal[..n]
         .iter()
         .zip(noise[..n].iter())

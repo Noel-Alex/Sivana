@@ -6,9 +6,7 @@ pub fn hann_periodic(n: usize) -> Vec<f32> {
         return Vec::new();
     }
     (0..n)
-        .map(|i| {
-            0.5 * (1.0 - (std::f32::consts::TAU * i as f32 / n as f32).cos())
-        })
+        .map(|i| 0.5 * (1.0 - (std::f32::consts::TAU * i as f32 / n as f32).cos()))
         .collect()
 }
 
@@ -21,11 +19,7 @@ pub fn hann_symmetric(n: usize) -> Vec<f32> {
         return vec![1.0];
     }
     (0..n)
-        .map(|i| {
-            0.5
-                * (1.0
-                    - (std::f32::consts::PI * i as f32 / (n - 1) as f32).cos())
-        })
+        .map(|i| 0.5 * (1.0 - (std::f32::consts::PI * i as f32 / (n - 1) as f32).cos()))
         .collect()
 }
 

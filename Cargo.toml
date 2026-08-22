@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["legacy", "crates/sivana-core", "crates/sivana-audio", "crates/sivana-dsp"]
+members = ["legacy", "crates/sivana-core", "crates/sivana-audio", "crates/sivana-dsp", "crates/sivana-bench"]
 
 # Sivana — production-grade Rust audio recognition system.
 #

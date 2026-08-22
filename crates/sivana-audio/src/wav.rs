@@ -149,13 +149,19 @@ pub fn read_wav(path: &Path) -> Result<WavData, WavError> {
     };
 
     match channels {
-        1 => Ok(WavData { sample_rate, samples: samples_i }),
+        1 => Ok(WavData {
+            sample_rate,
+            samples: samples_i,
+        }),
         2 => {
             let mono: Vec<f32> = samples_i
                 .chunks_exact(2)
                 .map(|c| (c[0] + c[1]) / 2.0)
                 .collect();
-            Ok(WavData { sample_rate, samples: mono })
+            Ok(WavData {
+                sample_rate,
+                samples: mono,
+            })
         }
         n => Err(WavError::UnsupportedChannelCount(n)),
     }
@@ -241,7 +247,9 @@ mod tests {
 
     #[test]
     fn written_bytes_are_deterministic() {
-        let samples: Vec<f32> = (0..1000).map(|i| ((i * 7) % 101) as f32 / 101.0 - 0.5).collect();
+        let samples: Vec<f32> = (0..1000)
+            .map(|i| ((i * 7) % 101) as f32 / 101.0 - 0.5)
+            .collect();
         let a = encode_pcm16(&samples);
         let b = encode_pcm16(&samples);
         assert_eq!(a, b);

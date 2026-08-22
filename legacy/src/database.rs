@@ -90,10 +90,11 @@ pub fn enroll_song(
     // Let's keep song insertion separate for now to easily get last_insert_rowid,
     // and then use a transaction for the bulk fingerprint inserts.
 
-    let preliminary_song_id_result = conn.execute(
+    let preliminary_song_id_result = conn.query_row(
         "INSERT INTO songs (name, file_path) VALUES (?1, ?2)
          ON CONFLICT(file_path) DO UPDATE SET name = excluded.name, enrolled_at = CURRENT_TIMESTAMP RETURNING song_id;",
         params![song_name, song_file_path],
+        |row| row.get::<_, i64>(0),
     );
 
     let db_song_id_i64: i64 = match preliminary_song_id_result {

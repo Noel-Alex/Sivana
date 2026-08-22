@@ -10,7 +10,9 @@
 use crate::rng::XorShift64Star;
 
 /// A minor pentatonic + major scale fragments; melody picks from these.
-const SCALE_SEMITONES: [f32; 12] = [0.0, 2.0, 3.0, 5.0, 7.0, 8.0, 10.0, 12.0, 10.0, 7.0, 5.0, 3.0];
+const SCALE_SEMITONES: [f32; 12] = [
+    0.0, 2.0, 3.0, 5.0, 7.0, 8.0, 10.0, 12.0, 10.0, 7.0, 5.0, 3.0,
+];
 
 /// Generate a synthetic song as mono f32 in `[-1, 1]`.
 ///
@@ -43,7 +45,12 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
     while t < duration_s {
         let degree = chord_degrees[bar_i % chord_degrees.len()];
         let chord_root = root_hz * 2.0_f32.powf(degree as f32 / 12.0);
-        let intervals = [(0.0, 1.0), (3.0 / 12.0, 0.6), (7.0 / 12.0, 0.7), (5.0 / 12.0, 0.35)];
+        let intervals = [
+            (0.0, 1.0),
+            (3.0 / 12.0, 0.6),
+            (7.0 / 12.0, 0.7),
+            (5.0 / 12.0, 0.35),
+        ];
         let seg_start = (t * sr) as usize;
         let seg_end = (((t + bar_len_s).min(duration_s)) * sr) as usize;
         let seg_end = seg_end.min(total).max(seg_start);
@@ -56,11 +63,11 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
             for (ratio, amp) in intervals {
                 let f = chord_root * 2.0_f32.powf(ratio);
                 // Additive saw-ish: fundamental + a few harmonics.
-                s += amp * 0.22 * (
-                    (std::f32::consts::TAU * f * ts).sin()
+                s += amp
+                    * 0.22
+                    * ((std::f32::consts::TAU * f * ts).sin()
                         + 0.45 * (std::f32::consts::TAU * f * 2.0 * ts).sin()
-                        + 0.22 * (std::f32::consts::TAU * f * 3.0 * ts).sin()
-                );
+                        + 0.22 * (std::f32::consts::TAU * f * 3.0 * ts).sin());
             }
             *slot += s * env;
         }
@@ -94,7 +101,11 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
         if beat_i % 2 == 0 && rng.next_f32() < 0.9 {
             let start = (bt * sr) as usize;
             let burst_len = (0.06 * sr) as usize;
-            for (k, slot) in out[start.min(total)..].iter_mut().take(burst_len).enumerate() {
+            for (k, slot) in out[start.min(total)..]
+                .iter_mut()
+                .take(burst_len)
+                .enumerate()
+            {
                 let env = (-(k as f32 / burst_len as f32) * 7.0).exp();
                 *slot += 0.25 * env * rng.next_bipolar();
             }
@@ -118,7 +129,11 @@ fn envelope(pos_s: f32, len_s: f32) -> f32 {
     let release = 0.15_f32.min(len_s * 0.3);
     let a = if pos_s < attack { pos_s / attack } else { 1.0 };
     let rel_pos = len_s - pos_s;
-    let r = if rel_pos < release { rel_pos.max(0.0) / release } else { 1.0 };
+    let r = if rel_pos < release {
+        rel_pos.max(0.0) / release
+    } else {
+        1.0
+    };
     a * r
 }
 

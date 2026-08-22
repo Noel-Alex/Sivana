@@ -108,7 +108,11 @@ pub struct DcBlocker {
 
 impl DcBlocker {
     pub fn new(sample_rate: f32) -> Self {
-        Self { r: 1.0 - 20.0 / sample_rate.max(21.0), x1: 0.0, y1: 0.0 }
+        Self {
+            r: 1.0 - 20.0 / sample_rate.max(21.0),
+            x1: 0.0,
+            y1: 0.0,
+        }
     }
 
     pub fn tick(&mut self, x: f32) -> f32 {
@@ -148,7 +152,10 @@ mod tests {
         let mut lp = Biquad::new(FilterKind::LowPass, sr, 1000.0, Q_BUTTERWORTH);
         lp.process(&mut high[2000..]); // skip transient region for measurement
         let ratio = rms(&high[2000..]) / rms(&tone(5000.0, sr, 0.5));
-        assert!(ratio < 0.35, "5 kHz should be strongly attenuated by 1 kHz LPF, ratio={ratio}");
+        assert!(
+            ratio < 0.35,
+            "5 kHz should be strongly attenuated by 1 kHz LPF, ratio={ratio}"
+        );
     }
 
     #[test]
