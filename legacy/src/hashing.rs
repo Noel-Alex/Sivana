@@ -25,11 +25,11 @@ pub fn create_hashes( // Made public
     let mut fingerprints: Vec<Fingerprint> = Vec::new();
 
     if peaks.len() < 2 {
-        println!("Debug: create_hashes - Not enough peaks to form pairs (need at least 2).");
+        crate::leg_dbg!("Debug: create_hashes - Not enough peaks to form pairs (need at least 2).");
         return fingerprints;
     }
 
-    println!(
+    crate::leg_dbg!(
         "Debug: create_hashes - Processing {} peaks. Target zone: dt=[{}-{}], df_abs_max={}, max_pairs={}",
         peaks.len(), dt_min_frames, dt_max_frames, df_abs_max_bins, max_pairs_per_anchor
     );
@@ -70,6 +70,6 @@ pub fn create_hashes( // Made public
             pairs_found_for_this_anchor += 1;
         }
     }
-    println!("Debug: create_hashes - Generated {} fingerprints.", fingerprints.len());
+    crate::leg_dbg!("Debug: create_hashes - Generated {} fingerprints.", fingerprints.len());
     fingerprints
 }

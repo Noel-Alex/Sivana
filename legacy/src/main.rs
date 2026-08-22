@@ -1,21 +1,14 @@
 // src/main.rs
 
-// Declare modules
-mod spectrogram;
-mod peaks;
-mod hashing;
-mod database;
-mod audio_loader;
-
-// --- IMPORTS ---
-use crate::audio_loader::load_audio_file;
-use crate::database::{
+// --- IMPORTS (from the frozen legacy library) ---
+use sivana_legacy::audio_loader::load_audio_file;
+use sivana_legacy::database::{
     open_db_connection, init_db, enroll_song, query_db_and_match, get_song_info,
-    SongId, // MatchResult is used internally by query_db_and_match
+    Song, SongId, // MatchResult is used internally by query_db_and_match
 };
-use crate::hashing::{create_hashes, MAX_PAIRS_PER_ANCHOR, TARGET_ZONE_DF_ABS_MAX_BINS, TARGET_ZONE_DT_MAX_FRAMES, TARGET_ZONE_DT_MIN_FRAMES};
-use crate::peaks::find_peaks;
-use crate::spectrogram::create_spectrogram;
+use sivana_legacy::hashing::{create_hashes, MAX_PAIRS_PER_ANCHOR, TARGET_ZONE_DF_ABS_MAX_BINS, TARGET_ZONE_DT_MAX_FRAMES, TARGET_ZONE_DT_MIN_FRAMES};
+use sivana_legacy::peaks::find_peaks;
+use sivana_legacy::spectrogram::create_spectrogram;
 
 use std::path::PathBuf; // For path arguments from clap
 use clap::Parser;     // For CLI argument parsing
@@ -196,8 +189,7 @@ fn main() -> Result<(), String> {
                 .map_err(|e| format!("Failed to prepare statement to list songs: {}", e))?;
 
             let song_iter = stmt.query_map([], |row| {
-                // Directly use database::Song if its fields match and it's pub
-                Ok(crate::database::Song {
+                Ok(Song {
                     id: row.get::<_, i64>(0)? as SongId, // Assuming SongId is u32
                     name: row.get(1)?,
                     file_path: row.get(2)?,

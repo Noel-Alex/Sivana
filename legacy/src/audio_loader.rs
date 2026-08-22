@@ -134,7 +134,7 @@ pub fn load_audio_file(
 
     // --- RESAMPLING STEP using Rubato ---
     if original_sample_rate != target_sample_rate {
-        println!(
+        crate::leg_dbg!(
             "Resampling audio from {} Hz to {} Hz...",
             original_sample_rate, target_sample_rate
         );
@@ -175,7 +175,7 @@ pub fn load_audio_file(
 
         // `waves_out` is Vec<Vec<f32>>. Since we resampled mono, it contains one Vec<f32>.
         if let Some(resampled_mono_samples) = waves_out.into_iter().next() {
-            println!(
+            crate::leg_dbg!(
                 "Resampling complete. Original samples: {}, Resampled samples: {}",
                 waves_in[0].len(), resampled_mono_samples.len()
             );
@@ -186,7 +186,7 @@ pub fn load_audio_file(
         }
     } else {
         // No resampling needed, sample rates already match.
-        println!(
+        crate::leg_dbg!(
             "No resampling needed. Audio already at target sample rate: {} Hz.",
             target_sample_rate
         );

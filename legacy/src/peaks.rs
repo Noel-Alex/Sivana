@@ -14,18 +14,18 @@ pub fn find_peaks( // Made public
     let mut peaks: Vec<Peak> = Vec::new();
 
     if spectrogram.is_empty() || spectrogram.first().map_or(true, |frame| frame.is_empty()) {
-        println!("Debug: find_peaks - Spectrogram is empty or first frame is empty.");
+        crate::leg_dbg!("Debug: find_peaks - Spectrogram is empty or first frame is empty.");
         return peaks;
     }
 
     let num_frames = spectrogram.len();
     let num_freq_bins = spectrogram[0].len();
 
-    println!(
+    crate::leg_dbg!(
         "Debug: find_peaks - Spectrogram: {} frames, {} freq bins.",
         num_frames, num_freq_bins
     );
-    println!(
+    crate::leg_dbg!(
         "Debug: find_peaks - Neighborhood: TimeRadius={}, FreqRadius={}, MinMag={}",
         neighborhood_time_radius, neighborhood_freq_radius, min_magnitude_threshold
     );
@@ -71,6 +71,6 @@ pub fn find_peaks( // Made public
             }
         }
     }
-    println!("Debug: find_peaks - Found {} peaks.", peaks.len());
+    crate::leg_dbg!("Debug: find_peaks - Found {} peaks.", peaks.len());
     peaks
 }

@@ -28,8 +28,14 @@ pub struct MatchResult {
 const DB_FILE_NAME: &str = "sivana_fingerprints.sqlite";
 
 pub fn open_db_connection() -> SqlResult<Connection> {
+    open_db_connection_at(Path::new(DB_FILE_NAME))
+}
+
+/// Additive helper: same behaviour as [`open_db_connection`] but at an
+/// explicit path, so benchmark harnesses can use isolated databases.
+pub fn open_db_connection_at(path: &Path) -> SqlResult<Connection> {
     let conn = Connection::open_with_flags(
-        Path::new(DB_FILE_NAME),
+        path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
     )?;
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
@@ -55,7 +61,7 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> { // init_db can take &Connec
          CREATE INDEX IF NOT EXISTS idx_fingerprints_song_id ON fingerprints (song_id);
          COMMIT;"
     )?;
-    println!("Database '{}' initialized successfully.", DB_FILE_NAME);
+    crate::leg_dbg!("Database '{}' initialized successfully.", DB_FILE_NAME);
     Ok(())
 }
 
@@ -71,7 +77,7 @@ pub fn enroll_song(
     peak_params: (usize, usize, f32),
     hash_params: (usize, usize, usize, usize),
 ) -> Result<SongId, String> {
-    println!("Attempting to enroll song: Name='{}'", song_name);
+    crate::leg_dbg!("Attempting to enroll song: Name='{}'", song_name);
 
     // It's good practice to wrap song insertion and fingerprint insertion in one transaction
     // if possible, but song insertion might need to happen first to get an ID,
@@ -117,7 +123,7 @@ pub fn enroll_song(
     }
 
     let song_id_u32 = db_song_id_i64 as SongId;
-    println!("Enrolling with DB Song ID: {}, Name='{}'", song_id_u32, song_name);
+    crate::leg_dbg!("Enrolling with DB Song ID: {}, Name='{}'", song_id_u32, song_name);
 
     // --- Fingerprint Generation ---
     let spectrogram = create_spectrogram(song_audio_samples, sample_rate, window_size, hop_size);
@@ -125,11 +131,11 @@ pub fn enroll_song(
 
     let peaks = find_peaks(&spectrogram, peak_params.0, peak_params.1, peak_params.2);
     if peaks.is_empty() { return Err(format!("No peaks found for song ID {}", song_id_u32)); }
-    println!("Found {} peaks for song ID {}", peaks.len(), song_id_u32);
+    crate::leg_dbg!("Found {} peaks for song ID {}", peaks.len(), song_id_u32);
 
     let fingerprints = create_hashes(&peaks, hash_params.0, hash_params.1, hash_params.2, hash_params.3);
     if fingerprints.is_empty() { return Err(format!("No fingerprints generated for song ID {}", song_id_u32)); }
-    println!("Generated {} fingerprints for song ID {}", fingerprints.len(), song_id_u32);
+    crate::leg_dbg!("Generated {} fingerprints for song ID {}", fingerprints.len(), song_id_u32);
 
     // --- Store fingerprints in DB within a transaction ---
     // conn is now &mut Connection, so conn.transaction() is valid.
@@ -149,7 +155,7 @@ pub fn enroll_song(
     }
     tx.commit().map_err(|e| format!("Failed to commit fingerprint transaction: {}", e))?;
 
-    println!("Successfully enrolled song: DB ID={}, Name='{}'", song_id_u32, song_name);
+    crate::leg_dbg!("Successfully enrolled song: DB ID={}, Name='{}'", song_id_u32, song_name);
     Ok(song_id_u32)
 }
 
@@ -159,13 +165,24 @@ pub fn query_db_and_match(
     conn: &Connection, // Querying only needs &Connection
     query_fingerprints: &[Fingerprint],
 ) -> Option<MatchResult> {
+    query_db_and_match_with_threshold(conn, query_fingerprints, 100)
+}
+
+/// Additive helper: identical matching logic to [`query_db_and_match`] but
+/// with the hard-coded minimum score (100) made a parameter, so benchmark
+/// harnesses can evaluate short queries and rejection behaviour.
+pub fn query_db_and_match_with_threshold(
+    conn: &Connection,
+    query_fingerprints: &[Fingerprint],
+    min_match_score: usize,
+) -> Option<MatchResult> {
     // ... (rest of query_db_and_match remains the same as your previous version, it was correct)
     if query_fingerprints.is_empty() {
-        println!("Debug: query_db - Query has no fingerprints.");
+        crate::leg_dbg!("Debug: query_db - Query has no fingerprints.");
         return None;
     }
 
-    println!("Debug: query_db - Querying with {} fingerprints.", query_fingerprints.len());
+    crate::leg_dbg!("Debug: query_db - Querying with {} fingerprints.", query_fingerprints.len());
 
     let mut offset_histograms: HashMap<SongId, HashMap<isize, usize>> = HashMap::new();
 
@@ -203,28 +220,28 @@ pub fn query_db_and_match(
     }
 
     if offset_histograms.is_empty() {
-        println!("Debug: query_db - No matching hashes found in DB for any query fingerprint.");
+        crate::leg_dbg!("Debug: query_db - No matching hashes found in DB for any query fingerprint.");
         return None;
     }
 
-    println!("\nDebug: Offset Histograms (Song ID -> <Offset Delta -> Count>):");
+    crate::leg_dbg!("\nDebug: Offset Histograms (Song ID -> <Offset Delta -> Count>):");
     for (song_id, histogram) in &offset_histograms {
-        println!("  Song ID {}:", song_id);
-        if histogram.is_empty() { println!("    (No matching offsets for this song)"); continue; }
+        crate::leg_dbg!("  Song ID {}:", song_id);
+        if histogram.is_empty() { crate::leg_dbg!("    (No matching offsets for this song)"); continue; }
         let mut sorted_histogram: Vec<_> = histogram.iter().collect();
         sorted_histogram.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-        println!("    Top {} matching offsets:", sorted_histogram.len().min(5));
+        crate::leg_dbg!("    Top {} matching offsets:", sorted_histogram.len().min(5));
         for (delta, count) in sorted_histogram.iter().take(5) {
-            println!("      Delta: {: >4}, Count: {}", delta, count);
+            crate::leg_dbg!("      Delta: {: >4}, Count: {}", delta, count);
         }
-        if sorted_histogram.len() > 5 { println!("      ... and {} more.", sorted_histogram.len() - 5); }
+        if sorted_histogram.len() > 5 { crate::leg_dbg!("      ... and {} more.", sorted_histogram.len() - 5); }
     }
-    println!("--- END DEBUGGING CODE ---");
+    crate::leg_dbg!("--- END DEBUGGING CODE ---");
 
     let mut best_match_overall: Option<MatchResult> = None;
     for (song_id, histogram) in &offset_histograms {
         if let Some((best_delta_for_song, &score_for_song)) = histogram.iter().max_by_key(|entry| entry.1) {
-            println!("Debug: query_db - For Song ID {}: Best offset_delta {} has score {}.", song_id, best_delta_for_song, score_for_song);
+            crate::leg_dbg!("Debug: query_db - For Song ID {}: Best offset_delta {} has score {}.", song_id, best_delta_for_song, score_for_song);
             if best_match_overall.as_ref().map_or(true, |current_best| score_for_song > current_best.score) {
                 best_match_overall = Some(MatchResult {
                     song_id: *song_id,
@@ -236,17 +253,16 @@ pub fn query_db_and_match(
     }
 
     if let Some(ref result) = best_match_overall {
-        const MIN_MATCH_SCORE: usize = 100;
-        if result.score < MIN_MATCH_SCORE {
-            println!("Debug: query_db - Best match score {} for Song ID {} is below threshold {}. Discarding.", result.score, result.song_id, MIN_MATCH_SCORE);
+        if result.score < min_match_score {
+            crate::leg_dbg!("Debug: query_db - Best match score {} for Song ID {} is below threshold {}. Discarding.", result.score, result.song_id, min_match_score);
             return None;
         }
     }
 
     if best_match_overall.is_some() {
-        println!("Debug: query_db - Found best overall match: {:?}", best_match_overall.as_ref().unwrap());
+        crate::leg_dbg!("Debug: query_db - Found best overall match: {:?}", best_match_overall.as_ref().unwrap());
     } else {
-        println!("Debug: query_db - No suitable match found after analyzing histograms.");
+        crate::leg_dbg!("Debug: query_db - No suitable match found after analyzing histograms.");
     }
     best_match_overall
 }
