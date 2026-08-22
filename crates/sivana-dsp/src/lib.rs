@@ -7,7 +7,10 @@
 pub mod filter;
 pub mod level;
 pub mod noise;
+pub mod peaks_v2;
 pub mod resample;
 pub mod sliding_max;
 pub mod stft;
 pub mod window;
+
+pub use peaks_v2::Peak;
