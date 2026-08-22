@@ -6,3 +6,4 @@ description = "Deterministic DSP primitives: windows, biquad filters, noise, res
 
 [dependencies]
 sivana-audio = { path = "../sivana-audio" }
+rustfft = "6.3"

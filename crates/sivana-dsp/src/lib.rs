@@ -8,4 +8,6 @@ pub mod filter;
 pub mod level;
 pub mod noise;
 pub mod resample;
+pub mod sliding_max;
+pub mod stft;
 pub mod window;
