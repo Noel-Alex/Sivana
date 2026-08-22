@@ -748,7 +748,9 @@ dependencies = [
  "sivana-audio",
  "sivana-core",
  "sivana-dsp",
+ "sivana-landmark",
  "sivana-legacy",
+ "sivana-match",
 ]
 
 [[package]]
@@ -768,6 +770,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sivana-landmark"
+version = "0.1.0"
+dependencies = [
+ "sivana-core",
+ "sivana-dsp",
+]
+
+[[package]]
 name = "sivana-legacy"
 version = "0.1.0"
 dependencies = [
@@ -776,6 +786,13 @@ dependencies = [
  "rusqlite",
  "rustfft",
  "symphonia",
+]
+
+[[package]]
+name = "sivana-match"
+version = "0.1.0"
+dependencies = [
+ "sivana-core",
 ]
 
 [[package]]

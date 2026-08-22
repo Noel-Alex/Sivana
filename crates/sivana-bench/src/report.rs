@@ -124,3 +124,74 @@ pub fn write_markdown(summary: &RunSummary, path: &Path) -> Result<(), String> {
     }
     std::fs::write(path, render_markdown(summary)).map_err(|e| e.to_string())
 }
+
+/// Side-by-side A/B table across engines (same grid required).
+pub fn write_comparison(summaries: &[&RunSummary], path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let mut out = String::from("# Sivana engine comparison\n\n");
+    out.push_str("Same corpus seed, same excerpt positions, same degradation grid.\n\n");
+
+    // Degradation ids from the first summary (grids are identical).
+    let mut degs: Vec<String> = summaries
+        .first()
+        .map(|s| s.cases.iter().map(|c| c.degradation.clone()).collect())
+        .unwrap_or_default();
+    degs.sort();
+    degs.dedup();
+
+    out.push_str("| degradation |");
+    for s in summaries {
+        out.push_str(&format!(" {} track/offset/gated |", s.engine));
+    }
+    out.push_str("\n|---|");
+    for _ in summaries {
+        out.push_str("---|");
+    }
+    out.push('\n');
+
+    let pct = |s: &RunSummary, deg: &str, f: fn(&crate::runner::CaseResult) -> bool| -> String {
+        let hits: Vec<&crate::runner::CaseResult> =
+            s.cases.iter().filter(|c| c.degradation == deg).collect();
+        if hits.is_empty() {
+            return "-".into();
+        }
+        format!(
+            "{}%",
+            hits.iter().filter(|c| f(c)).count() * 100 / hits.len()
+        )
+    };
+
+    for deg in &degs {
+        out.push_str(&format!("| {deg} |"));
+        for s in summaries {
+            out.push_str(&format!(
+                " {}/{}/{} |",
+                pct(s, deg, |c| c.track_hit),
+                pct(s, deg, |c| c.offset_hit),
+                pct(s, deg, |c| c.gated_hit)
+            ));
+        }
+        out.push('\n');
+    }
+
+    out.push_str("\n## Overall\n\n| engine | recall(track) | recall(offset) | gated | mean fp ms | mean match ms | false accepts |\n|---|---:|---:|---:|---:|---:|---:|\n");
+    for s in summaries {
+        let agg = s.aggregate();
+        out.push_str(&format!(
+            "| {} | {:.1}% | {:.1}% | {:.1}% | {:.2} | {:.2} | {}/{} |\n",
+            s.engine,
+            agg.recall_track * 100.0,
+            agg.recall_offset * 100.0,
+            agg.recall_gated * 100.0,
+            agg.mean_fingerprint_ms,
+            agg.mean_match_ms,
+            agg.false_accepts,
+            agg.rejection_cases
+        ));
+    }
+
+    std::fs::write(path, out).map_err(|e| e.to_string())
+}

@@ -53,3 +53,12 @@ largest self-inflicted recall loss (calibration motivation).
 
 Update this file after every engine change; keep old snapshots in git
 history rather than deleting them.
+
+## Snapshot - first A/B (2026-08-22, seed 2026)
+
+| engine | recall(track) | recall(offset) | gated | mean fp ms | mean match ms | false accepts |
+|---|---:|---:|---:|---:|---:|---:|
+| legacy | 90.0% | 76.7% | 20.0% | 1.63 | 6.21 | 0/10 |
+| landmark-v2 (first cut, 256 bands) | 63.3% | 41.7% | 63.3% | 13.13 | 0.48 | 10/10 |
+
+Gated semantics differ by engine (legacy score>=100; v2 inliers>=5 AND concentration>=0.5) - treat columns as within-engine trends until confidence calibration unifies them (E2).

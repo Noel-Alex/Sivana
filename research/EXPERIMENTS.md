@@ -31,3 +31,12 @@ Append new entries at the bottom; never delete history.
 - Sliding-max peak detector: equivalence vs brute force + speedup (§9.1).
 - Quadratic peak interpolation: does it improve cross-degradation stability? (§9.5)
 - Time-stretch (WSOLA/phase-vocoder) axis independent of pitch (§49).
+
+## E2. Landmark V2 first cut vs legacy (A/B)
+
+- **Date:** 2026-08-22
+- **Method:** cargo run -p sivana-bench --release -- run --tracks 3 --seconds 15; engines legacy vs landmark-v2 (PeaksV2 + scored target zones + 32-bit hashes + flat IDF matcher).
+- **Result:** v2 track recall 63.3% / offset 41.7% vs legacy 90/76.7 on clean+degradations; match latency 0.5 ms vs 6.2 ms (flat voting already ~12x faster); fingerprint cost 13 ms vs 1.6 ms (per-frame median sort dominates - optimization target).
+- **Finding:** out-of-catalog false accepts 10/10 for v2 first cut. Root cause hypothesis: synthetic fixtures share timbre structure, so (f1,f2,dt) collisions across songs are real, not noise; frequency band mapping (linear-in-log over full range) too coarse.
+- **Next:** peak-strength weighting in target scoring; band table benchmark sweep; stop-hash df stats once catalog >100 tracks; distinct per-seed timbres in fixtures.
+

@@ -122,29 +122,38 @@ fn main() -> Result<(), String> {
 
             let started = std::time::Instant::now();
             let c = corpus::generate(tracks, seconds, sample_rate, seed);
-            let summary =
-                runner::run_baseline(&c, &grid, &db).map_err(|e| format!("run failed: {e}"))?;
+            let grid = &grid;
+            let legacy = runner::run_baseline(&c, grid, &db)
+                .map_err(|e| format!("legacy run failed: {e}"))?;
+            let v2 = runner::run_landmark_v2(&c, grid)
+                .map_err(|e| format!("landmark-v2 run failed: {e}"))?;
 
-            report::write_json(&summary, &json)?;
-            report::write_markdown(&summary, &markdown)?;
+            report::write_json(&legacy, &json)?;
+            let v2_json = json.with_extension("v2.json");
+            report::write_json(&v2, &v2_json)?;
+            report::write_markdown(&legacy, &markdown)?;
+            report::write_comparison(&[&legacy, &v2], &markdown.with_file_name("COMPARISON.md"))?;
 
-            let agg = summary.aggregate();
-            println!("cases: {}", agg.total_cases);
+            for s in [&legacy, &v2] {
+                let agg = s.aggregate();
+                println!(
+                    "[{}] cases {} | recall track/offset/gated {:.1}%/{:.1}%/{:.1}% | fp {:.1} ms | match {:.1} ms | false accepts {}/{}",
+                    s.engine,
+                    agg.total_cases,
+                    agg.recall_track * 100.0,
+                    agg.recall_offset * 100.0,
+                    agg.recall_gated * 100.0,
+                    agg.mean_fingerprint_ms,
+                    agg.mean_match_ms,
+                    agg.false_accepts,
+                    agg.rejection_cases
+                );
+            }
             println!(
-                "recall@1 track/offset/gated: {:.1}% / {:.1}% / {:.1}%",
-                agg.recall_track * 100.0,
-                agg.recall_offset * 100.0,
-                agg.recall_gated * 100.0
+                "reports: {}, {}, COMPARISON.md",
+                json.display(),
+                markdown.display()
             );
-            println!(
-                "mean fingerprint {:.1} ms | mean match {:.1} ms | p95 total {:.1} ms",
-                agg.mean_fingerprint_ms, agg.mean_match_ms, agg.p95_total_ms
-            );
-            println!(
-                "out-of-catalog false accepts: {}/{}",
-                agg.false_accepts, agg.rejection_cases
-            );
-            println!("reports: {} , {}", json.display(), markdown.display());
             println!("wall time: {:.1}s", started.elapsed().as_secs_f64());
             Ok(())
         }

@@ -334,6 +334,147 @@ pub fn default_grid() -> GridConfig {
 
 pub use corpus::generate as generate_corpus;
 
+/// Landmark-V2 engine: streaming DSP + PeaksV2 fingerprints against the
+/// flat rarity-weighted matcher. Same grid, same case semantics as the
+/// legacy runner so results are directly comparable.
+pub fn run_landmark_v2(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary, String> {
+    let cfg = AlgorithmConfig::legacy();
+    let lm_cfg = sivana_landmark::LandmarkV2Config {
+        fft_window: cfg.fft.window_size,
+        hop: cfg.fft.hop_size,
+        ..Default::default()
+    };
+
+    // --- Build reference index ---
+    let mut index = sivana_match::InMemoryIndex::new();
+    for t in &corpus.tracks {
+        let fps = sivana_landmark::fingerprint(&t.samples, corpus.sample_rate, &lm_cfg);
+        index.add_recording(
+            t.recording,
+            &fps.iter()
+                .map(|f| (f.hash, f.anchor_time))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let params = sivana_match::MatchParams::default();
+
+    let frames_per_sec_f32 = cfg.frames_per_second() as f32;
+    let mut cases = Vec::new();
+    let mut case_id = 0usize;
+
+    for (ti, track) in corpus.tracks.iter().enumerate() {
+        for pos_i in 0..grid.positions_per_track {
+            let mut rng =
+                XorShift64Star::new(corpus.seed ^ 0x51E5).derive((ti * 977 + pos_i) as u64);
+            let max_start = (corpus.duration_s - grid.excerpt_seconds - 0.1).max(0.0);
+            let start_s = rng.next_f32() * max_start;
+            let clean = fixtures::excerpt(
+                &track.samples,
+                corpus.sample_rate,
+                start_s,
+                grid.excerpt_seconds,
+            );
+            let expected_offset = (start_s * frames_per_sec_f32) as i64;
+
+            for deg in &grid.degradations {
+                let query = deg.apply(&clean, corpus.sample_rate, case_id as u64);
+
+                let t0 = Instant::now();
+                let qfps_raw = sivana_landmark::fingerprint(&query, corpus.sample_rate, &lm_cfg);
+                let qfps: Vec<sivana_match::QueryFp> = qfps_raw
+                    .iter()
+                    .map(|f| sivana_match::QueryFp {
+                        hash: f.hash,
+                        anchor_time: f.anchor_time,
+                    })
+                    .collect();
+                let fingerprint_us = t0.elapsed().as_micros();
+
+                let t1 = Instant::now();
+                let outcomes = index.query(&qfps, &params);
+                let match_us = t1.elapsed().as_micros();
+
+                let best = outcomes.first();
+                let matched_name = best.and_then(|o| {
+                    corpus
+                        .tracks
+                        .iter()
+                        .find(|t| t.recording == o.recording)
+                        .map(|t| t.name.clone())
+                });
+                let track_hit = matches!(&matched_name, Some(n) if *n == track.name);
+                let offset_matched = best.map(|o| o.offset_frames);
+                let offset_ok = track_hit
+                    && offset_matched
+                        .map(|o| (o - expected_offset).abs() <= 2)
+                        .unwrap_or(false);
+                // "Gate" analogue for V2: require a few agreeing inliers so
+                // out-of-catalog rejection stays measurable on the same axis.
+                const GATED_MIN_INLIERS: usize = 3;
+                let gated = track_hit
+                    && best
+                        .map(|o| o.inliers >= GATED_MIN_INLIERS)
+                        .unwrap_or(false);
+
+                cases.push(CaseResult {
+                    case_id,
+                    degradation: deg.id(),
+                    expected_track: track.name.clone(),
+                    matched_track: matched_name,
+                    score: best.map(|o| o.inliers),
+                    track_hit,
+                    offset_hit: offset_ok,
+                    gated_hit: gated,
+                    offset_frames_expected: expected_offset,
+                    offset_frames_matched: offset_matched,
+                    fingerprint_us,
+                    match_us,
+                });
+                case_id += 1;
+            }
+        }
+    }
+
+    // --- Out-of-catalog rejection ---
+    let held_seed = corpus.seed ^ 0xDEAD_BEEF;
+    let held_samples =
+        fixtures::synth_song(held_seed, grid.excerpt_seconds + 2.0, corpus.sample_rate);
+    let mut rejection_cases = Vec::new();
+    for deg in &grid.degradations {
+        let query = deg.apply(&held_samples, corpus.sample_rate, 0xC0FFEE);
+        let qfps_raw = sivana_landmark::fingerprint(&query, corpus.sample_rate, &lm_cfg);
+        let qfps: Vec<sivana_match::QueryFp> = qfps_raw
+            .iter()
+            .map(|f| sivana_match::QueryFp {
+                hash: f.hash,
+                anchor_time: f.anchor_time,
+            })
+            .collect();
+        let outcomes = index.query(&qfps, &params);
+        rejection_cases.push(RejectionCase {
+            degradation: deg.id(),
+            accepted_by_gate: outcomes
+                .first()
+                .map(|o| o.inliers >= 5 && o.offset_concentration >= 0.5)
+                .unwrap_or(false),
+            best_score: outcomes.first().map(|o| o.inliers),
+        });
+    }
+
+    Ok(RunSummary {
+        engine: "landmark-v2".into(),
+        fingerprint_version: "v2-32bit".into(),
+        seed: corpus.seed,
+        sample_rate_hz: corpus.sample_rate,
+        track_seconds: corpus.duration_s,
+        n_tracks: corpus.tracks.len(),
+        excerpt_seconds: grid.excerpt_seconds,
+        config: cfg,
+        cases,
+        rejection_cases,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

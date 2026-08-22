@@ -1,0 +1,8 @@
+[package]
+name = "sivana-match"
+version = "0.1.0"
+edition = "2024"
+description = "Sivana matcher: rarity-weighted voting, stop hashes, candidate shortlist, offset verification."
+
+[dependencies]
+sivana-core = { path = "../sivana-core" }
