@@ -1,0 +1,8 @@
+[package]
+name = "sivana-dsp"
+version = "0.1.0"
+edition = "2024"
+description = "Deterministic DSP primitives: windows, biquad filters, noise, resampling, level math."
+
+[dependencies]
+sivana-audio = { path = "../sivana-audio" }

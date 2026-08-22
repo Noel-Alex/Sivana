@@ -437,6 +437,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sivana-dsp"
+version = "0.1.0"
+dependencies = [
+ "sivana-audio",
+]
+
+[[package]]
 name = "sivana-legacy"
 version = "0.1.0"
 dependencies = [
