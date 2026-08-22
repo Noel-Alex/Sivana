@@ -1,15 +1,17 @@
 // src/peaks.rs
 #[derive(Debug, Clone, Copy)]
-pub struct Peak { // Made public
-    pub time_idx: usize,     // Fields also public
+pub struct Peak {
+    // Made public
+    pub time_idx: usize, // Fields also public
     pub freq_bin_idx: usize,
 }
 
-pub fn find_peaks( // Made public
-                   spectrogram: &[Vec<f32>],
-                   neighborhood_time_radius: usize,
-                   neighborhood_freq_radius: usize,
-                   min_magnitude_threshold: f32,
+pub fn find_peaks(
+    // Made public
+    spectrogram: &[Vec<f32>],
+    neighborhood_time_radius: usize,
+    neighborhood_freq_radius: usize,
+    min_magnitude_threshold: f32,
 ) -> Vec<Peak> {
     let mut peaks: Vec<Peak> = Vec::new();
 
@@ -23,11 +25,14 @@ pub fn find_peaks( // Made public
 
     crate::leg_dbg!(
         "Debug: find_peaks - Spectrogram: {} frames, {} freq bins.",
-        num_frames, num_freq_bins
+        num_frames,
+        num_freq_bins
     );
     crate::leg_dbg!(
         "Debug: find_peaks - Neighborhood: TimeRadius={}, FreqRadius={}, MinMag={}",
-        neighborhood_time_radius, neighborhood_freq_radius, min_magnitude_threshold
+        neighborhood_time_radius,
+        neighborhood_freq_radius,
+        min_magnitude_threshold
     );
 
     for t_idx in 0..num_frames {
@@ -53,7 +58,9 @@ pub fn find_peaks( // Made public
                         is_local_max = false;
                         break;
                     }
-                    if spectrogram[nt_idx][nf_idx] == current_magnitude && (nt_idx < t_idx || (nt_idx == t_idx && nf_idx < f_idx)) {
+                    if spectrogram[nt_idx][nf_idx] == current_magnitude
+                        && (nt_idx < t_idx || (nt_idx == t_idx && nf_idx < f_idx))
+                    {
                         is_local_max = false;
                         break;
                     }

@@ -2,23 +2,22 @@
 
 use std::fs::File;
 use std::path::Path;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::core::audio::SampleBuffer; // Keep this for Symphonia's internal buffering
+use symphonia::core::probe::Hint; // Keep this for Symphonia's internal buffering
 
 // --- Add rubato imports ---
-use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 
 /// Loads an audio file, decodes it, converts to mono, and resamples to target_sample_rate.
 /// Returns a Vec<f32> of audio samples or an error string.
-pub fn load_audio_file(
-    file_path: &Path,
-    target_sample_rate: u32,
-) -> Result<Vec<f32>, String> {
+pub fn load_audio_file(file_path: &Path, target_sample_rate: u32) -> Result<Vec<f32>, String> {
     let src = File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
     let mss = MediaSourceStream::new(Box::new(src), Default::default());
 
@@ -55,7 +54,9 @@ pub fn load_audio_file(
     loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,
-            Err(SymphoniaError::IoError(ref err)) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Err(SymphoniaError::IoError(ref err))
+                if err.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
                 break; // End of file
             }
             Err(SymphoniaError::ResetRequired) => {
@@ -86,28 +87,32 @@ pub fn load_audio_file(
                     ));
                 }
 
-
-                let mut sample_buf = SampleBuffer::<f32>::new(
-                    decoded_packet_ref.capacity() as u64,
-                    spec,
-                );
+                let mut sample_buf =
+                    SampleBuffer::<f32>::new(decoded_packet_ref.capacity() as u64, spec);
                 sample_buf.copy_interleaved_ref(decoded_packet_ref);
 
                 let samples_this_packet = sample_buf.samples();
                 match spec.channels.count() {
-                    1 => { // Mono
+                    1 => {
+                        // Mono
                         collected_mono_samples.extend_from_slice(samples_this_packet);
                     }
-                    2 => { // Stereo -> Mono by averaging
+                    2 => {
+                        // Stereo -> Mono by averaging
                         for i in (0..samples_this_packet.len()).step_by(2) {
-                            collected_mono_samples.push((samples_this_packet[i] + samples_this_packet[i+1]) / 2.0);
+                            collected_mono_samples
+                                .push((samples_this_packet[i] + samples_this_packet[i + 1]) / 2.0);
                         }
                     }
-                    _ => { // More than 2 channels -> Mono by taking the first channel
+                    _ => {
+                        // More than 2 channels -> Mono by taking the first channel
                         for i in (0..samples_this_packet.len()).step_by(spec.channels.count()) {
                             collected_mono_samples.push(samples_this_packet[i]);
                         }
-                        eprintln!("Warning: Audio has {} channels. Taking first channel only.", spec.channels.count());
+                        eprintln!(
+                            "Warning: Audio has {} channels. Taking first channel only.",
+                            spec.channels.count()
+                        );
                     }
                 }
             }
@@ -129,14 +134,19 @@ pub fn load_audio_file(
     // Ensure we got a sample rate from the file.
     let original_sample_rate = match input_file_sample_rate {
         Some(rate) => rate,
-        None => return Err("Could not determine the original sample rate from the audio file.".to_string()),
+        None => {
+            return Err(
+                "Could not determine the original sample rate from the audio file.".to_string(),
+            );
+        }
     };
 
     // --- RESAMPLING STEP using Rubato ---
     if original_sample_rate != target_sample_rate {
         crate::leg_dbg!(
             "Resampling audio from {} Hz to {} Hz...",
-            original_sample_rate, target_sample_rate
+            original_sample_rate,
+            target_sample_rate
         );
 
         // Prepare input for Rubato: Vec<Vec<f32>> (outer Vec for channels, inner for samples)
@@ -166,18 +176,21 @@ pub fn load_audio_file(
             params,
             waves_in[0].len(), // Initial hint for input buffer length
             1,                 // Number of channels (mono)
-        ).map_err(|e| format!("Failed to create resampler: {:?}", e))?;
+        )
+        .map_err(|e| format!("Failed to create resampler: {:?}", e))?;
 
         // Process the audio waves.
         // `process` can take an optional pre-allocated output buffer, or it will allocate one.
-        let waves_out = resampler.process(&waves_in, None)
+        let waves_out = resampler
+            .process(&waves_in, None)
             .map_err(|e| format!("Error during resampling: {:?}", e))?;
 
         // `waves_out` is Vec<Vec<f32>>. Since we resampled mono, it contains one Vec<f32>.
         if let Some(resampled_mono_samples) = waves_out.into_iter().next() {
             crate::leg_dbg!(
                 "Resampling complete. Original samples: {}, Resampled samples: {}",
-                waves_in[0].len(), resampled_mono_samples.len()
+                waves_in[0].len(),
+                resampled_mono_samples.len()
             );
             Ok(resampled_mono_samples)
         } else {

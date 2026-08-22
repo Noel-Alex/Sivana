@@ -10,17 +10,19 @@ pub const HASH_FREQ_BITS: u32 = 10;
 pub const HASH_DELTA_TIME_BITS: u32 = 8;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Fingerprint { // Made public
-    pub hash: u64,          // Fields public
+pub struct Fingerprint {
+    // Made public
+    pub hash: u64, // Fields public
     pub anchor_time_idx: usize,
 }
 
-pub fn create_hashes( // Made public
-                      peaks: &[Peak],
-                      dt_min_frames: usize,
-                      dt_max_frames: usize,
-                      df_abs_max_bins: usize,
-                      max_pairs_per_anchor: usize,
+pub fn create_hashes(
+    // Made public
+    peaks: &[Peak],
+    dt_min_frames: usize,
+    dt_max_frames: usize,
+    df_abs_max_bins: usize,
+    max_pairs_per_anchor: usize,
 ) -> Vec<Fingerprint> {
     let mut fingerprints: Vec<Fingerprint> = Vec::new();
 
@@ -31,7 +33,11 @@ pub fn create_hashes( // Made public
 
     crate::leg_dbg!(
         "Debug: create_hashes - Processing {} peaks. Target zone: dt=[{}-{}], df_abs_max={}, max_pairs={}",
-        peaks.len(), dt_min_frames, dt_max_frames, df_abs_max_bins, max_pairs_per_anchor
+        peaks.len(),
+        dt_min_frames,
+        dt_max_frames,
+        df_abs_max_bins,
+        max_pairs_per_anchor
     );
 
     for i in 0..peaks.len() {
@@ -45,11 +51,19 @@ pub fn create_hashes( // Made public
             let target_peak = &peaks[j];
             let delta_time_frames = target_peak.time_idx.saturating_sub(anchor_peak.time_idx);
 
-            if delta_time_frames < dt_min_frames { continue; }
-            if delta_time_frames > dt_max_frames { continue; }
+            if delta_time_frames < dt_min_frames {
+                continue;
+            }
+            if delta_time_frames > dt_max_frames {
+                continue;
+            }
 
-            let delta_freq_bins_abs = (target_peak.freq_bin_idx as isize - anchor_peak.freq_bin_idx as isize).abs() as usize;
-            if delta_freq_bins_abs > df_abs_max_bins { continue; }
+            let delta_freq_bins_abs = (target_peak.freq_bin_idx as isize
+                - anchor_peak.freq_bin_idx as isize)
+                .abs() as usize;
+            if delta_freq_bins_abs > df_abs_max_bins {
+                continue;
+            }
 
             let f1 = anchor_peak.freq_bin_idx as u64;
             let f2 = target_peak.freq_bin_idx as u64;
@@ -59,9 +73,9 @@ pub fn create_hashes( // Made public
             let f2_masked = f2 & ((1 << HASH_FREQ_BITS) - 1);
             let dt_masked = dt & ((1 << HASH_DELTA_TIME_BITS) - 1);
 
-            let robust_hash_val = (f1_masked << (HASH_FREQ_BITS + HASH_DELTA_TIME_BITS)) |
-                (f2_masked << HASH_DELTA_TIME_BITS) |
-                dt_masked;
+            let robust_hash_val = (f1_masked << (HASH_FREQ_BITS + HASH_DELTA_TIME_BITS))
+                | (f2_masked << HASH_DELTA_TIME_BITS)
+                | dt_masked;
 
             fingerprints.push(Fingerprint {
                 hash: robust_hash_val,
@@ -70,6 +84,9 @@ pub fn create_hashes( // Made public
             pairs_found_for_this_anchor += 1;
         }
     }
-    crate::leg_dbg!("Debug: create_hashes - Generated {} fingerprints.", fingerprints.len());
+    crate::leg_dbg!(
+        "Debug: create_hashes - Generated {} fingerprints.",
+        fingerprints.len()
+    );
     fingerprints
 }

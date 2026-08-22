@@ -1,0 +1,11 @@
+[package]
+name = "sivana-core"
+version = "0.1.0"
+edition = "2024"
+description = "Shared Sivana types: recording identities, fingerprint versions, compact hashes and the algorithm configuration schema."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
