@@ -88,7 +88,7 @@ fn ingest_one(path: &Path, cfg: &LandmarkV2Config) -> Result<Ingested, String> {
     let pcm = if native_sr == TARGET_SAMPLE_RATE {
         mono
     } else {
-        sivana_dsp::resample::resample_linear(&mono, native_sr, TARGET_SAMPLE_RATE)
+        sivana_dsp::resample::resample_sinc(&mono, native_sr, TARGET_SAMPLE_RATE)
     };
     let fps = sivana_landmark::fingerprint(&pcm, TARGET_SAMPLE_RATE, cfg);
     if fps.is_empty() {

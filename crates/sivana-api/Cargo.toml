@@ -18,4 +18,6 @@ sivana-index = { path = "../sivana-index" }
 [dev-dependencies]
 sivana-audio = { path = "../sivana-audio" }
 sivana-bench = { path = "../sivana-bench" }
+sivana-dsp = { path = "../sivana-dsp" }
+sivana-ingest = { path = "../sivana-ingest" }
 sivana-wasm = { path = "../sivana-wasm" }
