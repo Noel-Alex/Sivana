@@ -54,8 +54,11 @@ Defer Engine C. Proceed ONLY when any of these triggers fire:
 - T1 — B1's discriminativity is fixed (df-weighted triplets, wider
   prints) AND transformed-audio recall still < 80% on the standard grid
   at zero FA. (Verifier may be built earlier if gate features plateau.)
-- T2 — a licensed evaluation set (§42) of real music ≥ 500 tracks is
-  available, making contrastive training measurable rather than synthetic.
+- T2 — a real-music evaluation corpus (≥ 500 tracks) is assembled.
+  Data availability is NOT assumed to be a blocker: the owner treats
+  corpus assembly as solved (sivana-ingest accepts any directory of
+  mp3/flac/wav), so this trigger fires the moment a corpus is dropped in
+  and ingested. Acquisition method and terms are the operator's call.
 - T3 — a production requirement demands pitch-shifted recognition with
   calibrated confidence inside one second of capture.
 
