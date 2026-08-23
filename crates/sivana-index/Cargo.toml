@@ -1,0 +1,22 @@
+[package]
+name = "sivana-index"
+version = "0.1.0"
+edition = "2024"
+
+# Stage 1 backend: LMDB via heed (PLAN §17) proves the posting layout.
+# Stage 2 backend: the custom memory-mapped .siv segment format
+# (index-format/SPEC.md, PLAN §18-§21).
+[dependencies]
+heed = "0.20"
+memmap2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sivana-core = { path = "../sivana-core" }
+
+[dev-dependencies]
+criterion = "0.5"
+sivana-audio = { path = "../sivana-audio" }
+
+[[bench]]
+name = "lookup"
+harness = false

@@ -7,6 +7,7 @@ members = [
     "crates/sivana-dsp",
     "crates/sivana-landmark",
     "crates/sivana-match",
+    "crates/sivana-index",
     "crates/sivana-bench",
 ]
 
@@ -16,6 +17,7 @@ members = [
 #   crates/sivana-core    shared fingerprint/version/config types
 #   crates/sivana-dsp     streaming DSP primitives
 #   crates/sivana-audio   deterministic audio IO + synthetic fixtures
+#   crates/sivana-index   LMDB + .siv mmap index backends (Phase 3)
 #   crates/sivana-bench   degradation generator + benchmark runner
 #   legacy/               frozen prototype, the control implementation
 
