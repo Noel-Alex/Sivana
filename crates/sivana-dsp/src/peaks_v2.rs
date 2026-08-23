@@ -64,12 +64,9 @@ impl Default for PeaksV2Config {
     }
 }
 
-fn to_db(mags: &[f32], out: &mut Vec<f32>) {
-    out.clear();
-    out.reserve(mags.len());
-    for m in mags {
-        out.push(20.0 * m.max(1e-10).log10());
-    }
+/// dB level of one linear magnitude (clamped at -200 dB to stay finite).
+fn to_db(m: f32) -> f32 {
+    20.0 * m.max(1e-10).log10()
 }
 
 /// Median of a buffer via selection (O(n) average). Copies into scratch so
@@ -100,15 +97,14 @@ pub struct PeakStreamer {
     next_emit: u64,
     /// Total frames fed.
     fed: u64,
-    db_ring: std::collections::VecDeque<Vec<f32>>,
     fmap_ring: std::collections::VecDeque<Vec<f32>>,
     mag_ring: std::collections::VecDeque<Vec<f32>>,
     floor_ring: std::collections::VecDeque<f32>,
     // Scratch (reused, never retained between calls).
-    db_scratch: Vec<f32>,
     fmap_scratch: Vec<f32>,
     sel_scratch: Vec<f32>,
     cand_scratch: Vec<(usize, f32, f32)>, // (bin, magnitude, prominence_db)
+    max_scratch: crate::sliding_max::SlidingMaxScratch,
 }
 
 impl PeakStreamer {
@@ -121,14 +117,13 @@ impl PeakStreamer {
             oldest: 0,
             next_emit: 0,
             fed: 0,
-            db_ring: std::collections::VecDeque::new(),
             fmap_ring: std::collections::VecDeque::new(),
             mag_ring: std::collections::VecDeque::new(),
             floor_ring: std::collections::VecDeque::new(),
-            db_scratch: Vec::new(),
             fmap_scratch: Vec::new(),
             sel_scratch: Vec::new(),
             cand_scratch: Vec::new(),
+            max_scratch: crate::sliding_max::SlidingMaxScratch::new(),
         }
     }
 
@@ -151,15 +146,14 @@ impl PeakStreamer {
             return;
         }
 
-        to_db(mags, &mut self.db_scratch);
-        let floor = median_of(&self.db_scratch, &mut self.sel_scratch);
-        crate::sliding_max::sliding_max_centered_into(
-            mags,
-            self.cfg.freq_radius,
-            &mut self.fmap_scratch,
-        );
+        // Noise floor: the median of the frame in dB. log is monotone, so
+        // taking the median of linear magnitudes and logging that single
+        // value is bit-identical to converting the whole frame first — at
+        // one log call instead of F.
+        let floor = to_db(median_of(mags, &mut self.sel_scratch));
+        self.max_scratch
+            .centered_into(mags, self.cfg.freq_radius, &mut self.fmap_scratch);
 
-        self.db_ring.push_back(self.db_scratch.clone());
         self.fmap_ring.push_back(self.fmap_scratch.clone());
         self.mag_ring.push_back(mags.to_vec());
         self.floor_ring.push_back(floor);
@@ -188,7 +182,7 @@ impl PeakStreamer {
         debug_assert!(self.next_emit < self.fed);
         let t = self.next_emit;
         let base = (t - self.oldest) as usize;
-        let filled = self.db_ring.len();
+        let filled = self.fmap_ring.len();
         let r = self.cfg.time_radius;
         let lo = base.saturating_sub(r);
         let hi = (base + r).min(filled - 1);
@@ -207,7 +201,8 @@ impl PeakStreamer {
             if m != vmax {
                 continue; // not the window maximum
             }
-            let db = self.db_ring[base][b];
+            // dB is only computed for cells that passed the local-max test.
+            let db = to_db(m);
             if db < self.cfg.absolute_floor {
                 continue;
             }
@@ -241,7 +236,6 @@ impl PeakStreamer {
         // Rows below next_emit - r can no longer affect any decision.
         let keep_from = self.next_emit.saturating_sub(r as u64);
         while self.oldest < keep_from {
-            self.db_ring.pop_front();
             self.fmap_ring.pop_front();
             self.mag_ring.pop_front();
             self.floor_ring.pop_front();
@@ -481,9 +475,9 @@ mod tests {
         ps.finish(&mut chunk);
         let bound = 2 * cfg.time_radius + 2;
         assert!(
-            ps.db_ring.len() <= bound,
+            ps.fmap_ring.len() <= bound,
             "ring grew to {} rows",
-            ps.db_ring.len()
+            ps.fmap_ring.len()
         );
     }
 }

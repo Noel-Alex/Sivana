@@ -61,6 +61,35 @@ pub fn sliding_max_centered(input: &[f32], radius: usize) -> Vec<f32> {
 
 /// Allocation-reusing centered variant.
 pub fn sliding_max_centered_into(input: &[f32], radius: usize, out: &mut Vec<f32>) {
+    let mut scratch = SlidingMaxScratch::default();
+    sliding_max_centered_scratch(input, radius, out, &mut scratch);
+}
+
+/// Reusable deque state for hot loops that call the centered filter every
+/// frame — avoids re-allocating the two index deques per call.
+#[derive(Default)]
+pub struct SlidingMaxScratch {
+    fwd: VecDeque<usize>,
+    bwd: VecDeque<usize>,
+}
+
+impl SlidingMaxScratch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// [`sliding_max_centered_into`] with reused deques.
+    pub fn centered_into(&mut self, input: &[f32], radius: usize, out: &mut Vec<f32>) {
+        sliding_max_centered_scratch(input, radius, out, self);
+    }
+}
+
+fn sliding_max_centered_scratch(
+    input: &[f32],
+    radius: usize,
+    out: &mut Vec<f32>,
+    scratch: &mut SlidingMaxScratch,
+) {
     let n = input.len();
     out.clear();
     if n == 0 {
@@ -70,7 +99,8 @@ pub fn sliding_max_centered_into(input: &[f32], radius: usize, out: &mut Vec<f32
     out.resize(n, f32::NEG_INFINITY);
 
     // Forward pass: out[i] = max input[max(0, i-w+1)..=i].
-    let mut fwd: VecDeque<usize> = VecDeque::with_capacity(w.min(n));
+    let fwd = &mut scratch.fwd;
+    fwd.clear();
     for i in 0..n {
         while let Some(&back) = fwd.back() {
             if input[back] <= input[i] {
@@ -90,7 +120,8 @@ pub fn sliding_max_centered_into(input: &[f32], radius: usize, out: &mut Vec<f32
     // Backward pass: right[i] = max input[i..=min(n, i+w)-1]; fold into out.
     // Iterating downwards puts out-of-window (large) indices at the FRONT
     // and keeps the running maximum at the front too.
-    let mut bwd: VecDeque<usize> = VecDeque::with_capacity(w.min(n));
+    let bwd = &mut scratch.bwd;
+    bwd.clear();
     for i in (0..n).rev() {
         while let Some(&back) = bwd.back() {
             if input[back] <= input[i] {
