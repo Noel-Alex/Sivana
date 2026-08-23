@@ -26,5 +26,9 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+      - name: WASM build check (Phase 4)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check -p sivana-wasm --target wasm32-unknown-unknown
       - name: Benchmark smoke (Phase 0 exit criteria)
         run: cargo run -p sivana-bench --release -- run --tracks 2 --seconds 8

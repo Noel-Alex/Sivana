@@ -1022,6 +1022,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sivana-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sivana-audio",
+ "sivana-core",
+ "sivana-dsp",
+ "sivana-landmark",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

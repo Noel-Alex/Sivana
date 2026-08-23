@@ -129,6 +129,8 @@ pub struct LandmarkStreamer {
     frames: VecDeque<FramePeaks>,
     /// Anchors awaiting target-zone completion, in creation (time) order.
     anchors: VecDeque<PendingAnchor>,
+    /// Fingerprints finalized but not yet drained by the caller.
+    pending: Vec<Fingerprint32>,
 
     // Scratch — allocated once, cleared per use.
     mags: Vec<f32>,
@@ -149,30 +151,29 @@ impl LandmarkStreamer {
             total_bins,
             frames: VecDeque::new(),
             anchors: VecDeque::new(),
+            pending: Vec::new(),
             mags: Vec::new(),
             peak_out: Vec::new(),
             slot_best: Vec::new(),
         }
     }
 
-    /// Feed PCM; append newly finalized fingerprints to `out` (cleared
-    /// first, like the DSP primitives' `_into` convention).
-    pub fn process(&mut self, samples: &[f32], out: &mut Vec<Fingerprint32>) {
-        out.clear();
+    /// Feed PCM. Finalized fingerprints accumulate internally — drain them
+    /// with [`Self::drain_into`] (per chunk, per tick, or only at the end;
+    /// results are identical).
+    pub fn process(&mut self, samples: &[f32]) {
         self.stft.feed(samples);
         while let Some(frame_idx) = self.stft.next_frame(&mut self.mags) {
             self.peaks.process_frame(&self.mags, &mut self.peak_out);
             if !self.peak_out.is_empty() {
                 let peaks: Vec<Peak> = self.peak_out.split_off(0);
-                self.ingest_frame(frame_idx, peaks, out);
+                self.ingest_frame(frame_idx, peaks);
             }
         }
     }
 
-    /// Flush end-of-stream state; append any fingerprints whose target
-    /// zones complete against the final frames.
-    pub fn finish(&mut self, out: &mut Vec<Fingerprint32>) {
-        out.clear();
+    /// Flush end-of-stream state (truncated target zones at the tail).
+    pub fn finish(&mut self) {
         self.peaks.finish(&mut self.peak_out);
         if !self.peak_out.is_empty() {
             let last_idx = self
@@ -181,13 +182,18 @@ impl LandmarkStreamer {
                 .map_or(0, |f| f.time)
                 .max(self.next_expected_frame());
             let peaks: Vec<Peak> = self.peak_out.split_off(0);
-            self.ingest_frame(last_idx, peaks, out);
+            self.ingest_frame(last_idx, peaks);
         }
         // Finalize everything left with truncated target zones.
         while let Some(anchor) = self.anchors.pop_front() {
-            self.emit_for_anchor(&anchor, out);
+            self.emit_for_anchor(&anchor);
         }
         self.frames.clear();
+    }
+
+    /// Move all finalized fingerprints into `out` (appended, not cleared).
+    pub fn drain_into(&mut self, out: &mut Vec<Fingerprint32>) {
+        out.append(&mut self.pending);
     }
 
     fn next_expected_frame(&self) -> u64 {
@@ -198,7 +204,7 @@ impl LandmarkStreamer {
 
     /// Register a decided frame's peaks, open new anchors, and finalize
     /// every anchor whose target zone is now fully covered.
-    fn ingest_frame(&mut self, frame_idx: u64, peaks: Vec<Peak>, out: &mut Vec<Fingerprint32>) {
+    fn ingest_frame(&mut self, frame_idx: u64, peaks: Vec<Peak>) {
         for p in &peaks {
             let f1q = quantize_bin(p.freq_bin_idx, self.total_bins, self.cfg.freq_bands);
             self.anchors.push_back(PendingAnchor {
@@ -215,7 +221,7 @@ impl LandmarkStreamer {
         while let Some(front) = self.anchors.front() {
             if front.time_idx + self.cfg.dt_max as u64 <= frame_idx {
                 let anchor = self.anchors.pop_front().expect("front existed");
-                self.emit_for_anchor(&anchor, out);
+                self.emit_for_anchor(&anchor);
             } else {
                 break;
             }
@@ -238,7 +244,7 @@ impl LandmarkStreamer {
     /// Targets are limited to frames actually received — an anchor near the
     /// end of a stream simply sees a truncated zone, matching batch
     /// behaviour where the spectrogram ends.
-    fn emit_for_anchor(&mut self, anchor: &PendingAnchor, out: &mut Vec<Fingerprint32>) {
+    fn emit_for_anchor(&mut self, anchor: &PendingAnchor) {
         let zone_width = self.cfg.dt_max.saturating_sub(self.cfg.dt_min) + 1;
         let slots = self.cfg.fanout.min(zone_width).max(1);
         let step = (zone_width / slots).max(1);
@@ -284,7 +290,7 @@ impl LandmarkStreamer {
         for (slot, best) in self.slot_best.iter().enumerate() {
             if let Some(b) = best {
                 debug_assert!(slot < slots);
-                out.push(Fingerprint32 {
+                self.pending.push(Fingerprint32 {
                     hash: pack_hash32(f1q, b.f2q, b.dt).0,
                     anchor_time: anchor.time_idx as u32,
                 });
@@ -304,15 +310,13 @@ pub fn fingerprint(
     cfg: &LandmarkV2Config,
 ) -> Vec<Fingerprint32> {
     let mut streamer = LandmarkStreamer::new(cfg);
-    let mut out = Vec::new();
-    let mut chunk = Vec::new();
     const FEED_LEN: usize = 4096;
     for piece in samples.chunks(FEED_LEN) {
-        streamer.process(piece, &mut chunk);
-        out.append(&mut chunk);
+        streamer.process(piece);
     }
-    streamer.finish(&mut chunk);
-    out.append(&mut chunk);
+    streamer.finish();
+    let mut out = Vec::new();
+    streamer.drain_into(&mut out);
     out
 }
 
@@ -377,18 +381,43 @@ mod tests {
 
         let mut s = LandmarkStreamer::new(&cfg);
         let mut got = Vec::new();
-        let mut chunk = Vec::new();
         for piece in sig.chunks(3333) {
-            s.process(piece, &mut chunk);
-            got.append(&mut chunk);
+            s.process(piece);
         }
-        s.finish(&mut chunk);
-        got.append(&mut chunk);
+        s.finish();
+        s.drain_into(&mut got);
         assert_eq!(got.len(), batch.len(), "same fingerprint count");
         for (a, b) in got.iter().zip(batch.iter()) {
             assert_eq!(a.hash, b.hash, "stream vs batch hash");
             assert_eq!(a.anchor_time, b.anchor_time);
         }
+    }
+
+    #[test]
+    fn draining_cadence_does_not_matter() {
+        // Draining every chunk vs once at the end must yield identical
+        // streams — callers may batch however their transport prefers.
+        let sig = tone_pair(22_050);
+        let cfg = LandmarkV2Config::default();
+
+        let mut per_chunk = Vec::new();
+        let mut s1 = LandmarkStreamer::new(&cfg);
+        let mut sink = Vec::new();
+        for piece in sig.chunks(1024) {
+            s1.process(piece);
+            s1.drain_into(&mut sink);
+            per_chunk.append(&mut sink);
+        }
+        s1.finish();
+        s1.drain_into(&mut per_chunk);
+
+        let mut once = Vec::new();
+        let mut s2 = LandmarkStreamer::new(&cfg);
+        s2.process(&sig);
+        s2.finish();
+        s2.drain_into(&mut once);
+
+        assert_eq!(per_chunk, once);
     }
 
     #[test]

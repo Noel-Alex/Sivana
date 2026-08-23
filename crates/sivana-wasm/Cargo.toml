@@ -1,0 +1,22 @@
+[package]
+name = "sivana-wasm"
+version = "0.1.0"
+edition = "2024"
+
+# The same source compiles natively (tests, determinism fixtures) and to
+# wasm32 for the browser. wasm-bindgen only enters the graph on wasm.
+
+[dependencies]
+sivana-core = { path = "../sivana-core" }
+sivana-dsp = { path = "../sivana-dsp" }
+sivana-landmark = { path = "../sivana-landmark" }
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+sivana-audio = { path = "../sivana-audio" }
+
+[lib]
+crate-type = ["rlib", "cdylib"]
