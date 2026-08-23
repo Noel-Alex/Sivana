@@ -24,6 +24,10 @@ enum Command {
         /// Worker threads (0 = all cores).
         #[arg(long, default_value_t = 0)]
         jobs: usize,
+        /// Skip files whose name contains any of these comma-separated
+        /// substrings (case-insensitive), e.g. internal WIP variants.
+        #[arg(long, default_value = "")]
+        exclude: String,
     },
     /// Merge all active segments into one and prune the rest.
     Compact {
@@ -72,8 +76,24 @@ fn main() -> Result<(), String> {
             catalog,
             files,
             jobs,
+            exclude,
         } => {
-            let files = collect_files(&files);
+            let skip: Vec<String> = exclude
+                .split(',')
+                .map(|p| p.trim().to_lowercase())
+                .filter(|p| !p.is_empty())
+                .collect();
+            let mut files = collect_files(&files);
+            if !skip.is_empty() {
+                files.retain(|p| {
+                    let name = p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    !skip.iter().any(|pat| name.contains(pat))
+                });
+            }
             if files.is_empty() {
                 return Err("no input files found".into());
             }

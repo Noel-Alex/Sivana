@@ -19,6 +19,11 @@ use sivana_match::{InMemoryIndex, MatchOutcome, MatchParams, QueryFp};
 
 /// Calibrated zero-false-accept gate (E4: bands=512, tol=2).
 pub const GATE_MIN_INLIERS: usize = 7;
+/// E8: same-franchise catalogs produce cross-track collisions whose
+/// inlier counts overlap true matches; the winner's margin over the
+/// runner-up separates cleanly (false accepts <= 1.8, true >= 3.0 on
+/// measured DELTARUNE probes).
+pub const GATE_MIN_MARGIN: f32 = 2.5;
 pub const GATE_MIN_CONCENTRATION: f32 = 0.5;
 /// Looser bar for surfacing an interim CANDIDATE.
 const CANDIDATE_MIN_INLIERS: usize = 4;
@@ -66,9 +71,12 @@ impl RecognitionSession {
     /// Eagerly enforce the capture timeout: a client that stops (or
     /// finishes) streaming must still get a terminal event instead of
     /// hanging until its next batch. Called on a timer by the server;
-    /// returns the state after any transition.
+    /// returns the state after any transition. A Candidate that never
+    /// strengthens within the window is also a NoMatch — otherwise weak
+    /// queries hang forever.
     pub fn poll_timeout(&mut self) -> RecognitionState {
-        if self.state == RecognitionState::Listening && self.capture_seconds() > MAX_CAPTURE_SECONDS
+        if (self.state == RecognitionState::Listening || self.state == RecognitionState::Candidate)
+            && self.capture_seconds() > MAX_CAPTURE_SECONDS
         {
             self.state = RecognitionState::NoMatch;
         }
@@ -98,7 +106,9 @@ impl RecognitionSession {
 
         let outcomes = index.query(&self.fps, params);
         if let Some(top) = outcomes.first() {
-            if top.inliers >= GATE_MIN_INLIERS && top.offset_concentration >= GATE_MIN_CONCENTRATION
+            if top.inliers >= GATE_MIN_INLIERS
+                && top.offset_concentration >= GATE_MIN_CONCENTRATION
+                && top.margin_over_next >= GATE_MIN_MARGIN
             {
                 self.state = RecognitionState::ConfidentMatch;
                 self.outcome = Some(top.clone());

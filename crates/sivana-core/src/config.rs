@@ -222,4 +222,3 @@ mod tests {
         assert!((cfg.frames_per_second() - 22050.0 / 1024.0).abs() < 1e-9);
     }
 }
-
