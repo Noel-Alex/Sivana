@@ -92,6 +92,11 @@ pub fn fingerprint(
 
     let peaks = find_peaks_v2(&spectrogram, &cfg.peaks);
     let total_bins = spectrogram[0].len();
+    let global_max = spectrogram
+        .iter()
+        .flat_map(|f| f.iter())
+        .copied()
+        .fold(0.0f32, f32::max);
 
     // Group peak indices by frame for zone lookup.
     let mut by_frame: Vec<Vec<usize>> = vec![Vec::new(); spectrogram.len()];
@@ -129,9 +134,15 @@ pub fn fingerprint(
                     break; // peaks sorted by time
                 }
                 let df = target.freq_bin_idx.abs_diff(anchor.freq_bin_idx);
-                // Score: prefer spectrally separated targets (§11); strength
-                // weighting arrives with peak magnitudes in PeaksV2 output.
-                let score = df as f32;
+                // Score: spectral separation + peak strength (§11, E2).
+                // Strength is normalized against the strongest peak in the
+                // scan so the term is scale-free across recordings.
+                let rel = if global_max > 0.0 {
+                    target.magnitude / global_max
+                } else {
+                    0.0
+                };
+                let score = df as f32 * 0.5 + rel * 64.0;
                 if best.as_ref().is_none_or(|(_, s)| score > *s) {
                     best = Some((j, score));
                 }

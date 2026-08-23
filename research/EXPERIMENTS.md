@@ -40,3 +40,8 @@ Append new entries at the bottom; never delete history.
 - **Finding:** out-of-catalog false accepts 10/10 for v2 first cut. Root cause hypothesis: synthetic fixtures share timbre structure, so (f1,f2,dt) collisions across songs are real, not noise; frequency band mapping (linear-in-log over full range) too coarse.
 - **Next:** peak-strength weighting in target scoring; band table benchmark sweep; stop-hash df stats once catalog >100 tracks; distinct per-seed timbres in fixtures.
 
+
+### E2a. Peak-strength weighting in target scoring
+- **Change:** target score = 0.5*df + 64*(magnitude/global_max); Peak now carries magnitude.
+- **Result:** track recall unchanged (63.3%), offset 40.0% (was 41.7%) - neutral within noise on the 60-case grid.
+- **Decision:** keep (harmless, principled per SS11); the dominant recall limiter is hash collision structure, so next lever is band-table design and timbre-diverse fixtures before more scoring weights.

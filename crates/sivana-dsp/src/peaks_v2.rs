@@ -14,10 +14,12 @@
 //! strict tie-break), which the property tests exploit as an oracle.
 
 /// A spectral event: one (frame, bin) cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Peak {
     pub time_idx: usize,
     pub freq_bin_idx: usize,
+    /// Linear magnitude at the cell (relative strength for scoring).
+    pub magnitude: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -137,10 +139,11 @@ pub fn find_peaks_v2(spectrogram: &[Vec<f32>], cfg: &PeaksV2Config) -> Vec<Peak>
             frame_peaks.truncate(cfg.max_peaks_per_frame);
             frame_peaks.sort_by_key(|p| p.0);
         }
-        for (b, _) in frame_peaks {
+        for (b, m) in frame_peaks {
             peaks.push(Peak {
                 time_idx: t,
                 freq_bin_idx: b,
+                magnitude: m,
             });
         }
     }
@@ -187,6 +190,7 @@ mod tests {
                     peaks.push(Peak {
                         time_idx: t,
                         freq_bin_idx: b,
+                        magnitude: cur,
                     });
                 }
             }
@@ -223,7 +227,8 @@ mod tests {
         let peaks = find_peaks_v2(&spec, &PeaksV2Config::default());
         assert!(peaks.contains(&Peak {
             time_idx: 10,
-            freq_bin_idx: 100
+            freq_bin_idx: 100,
+            magnitude: 50.0
         }));
     }
 
