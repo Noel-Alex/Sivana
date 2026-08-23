@@ -85,7 +85,7 @@ fn bench_peak_streamer(c: &mut Criterion) {
     let mut frames: Vec<Vec<f32>> = Vec::new();
     let mut mags = Vec::new();
     stft.feed(&samples);
-    while let Some(_) = stft.next_frame(&mut mags) {
+    while stft.next_frame(&mut mags).is_some() {
         frames.push(mags.clone());
     }
 
