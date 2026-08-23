@@ -12,7 +12,7 @@ pub mod hash;
 pub mod ids;
 pub mod version;
 
-pub use config::AlgorithmConfig;
+pub use config::{AlgorithmConfig, OPERATING_FREQ_BANDS};
 pub use hash::{Hash32, pack_hash32, unpack_hash32};
 pub use ids::RecordingId;
 pub use version::{EngineId, FingerprintVersion, current_fingerprint_version};

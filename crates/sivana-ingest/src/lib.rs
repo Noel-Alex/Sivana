@@ -23,9 +23,9 @@ use sivana_wasm::encode_batch;
 /// Target sample rate for all fingerprinting (Phase 0 decision).
 pub const TARGET_SAMPLE_RATE: u32 = 22_050;
 
-/// E4-calibrated band count: the only configuration with a measured
-/// zero-false-accept operating point.
-pub const FREQ_BANDS: u16 = 512;
+/// E4-calibrated band count, defined once in core so every engine and
+/// the catalog agree.
+pub const FREQ_BANDS: u16 = sivana_core::OPERATING_FREQ_BANDS;
 
 /// On-disk catalog state beyond the index segments.
 #[derive(Default, Serialize, Deserialize)]

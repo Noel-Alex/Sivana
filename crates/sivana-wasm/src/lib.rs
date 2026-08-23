@@ -107,12 +107,19 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmFingerprinter {
-        /// Create an engine for mono PCM at `sample_rate_hz` using default
-        /// V2 landmark parameters.
+        /// Create an engine for mono PCM at `sample_rate_hz` using the
+        /// production operating point (E4: 512 log bands — MUST match the
+        /// ingest configuration or hashes cannot collide).
         #[wasm_bindgen(constructor)]
         pub fn new(sample_rate_hz: u32) -> WasmFingerprinter {
             Self {
-                inner: FingerprintEngine::new(sample_rate_hz, LandmarkV2Config::default()),
+                inner: FingerprintEngine::new(
+                    sample_rate_hz,
+                    LandmarkV2Config {
+                        freq_bands: sivana_core::OPERATING_FREQ_BANDS,
+                        ..Default::default()
+                    },
+                ),
                 batch: Vec::new(),
             }
         }

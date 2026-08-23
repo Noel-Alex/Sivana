@@ -337,6 +337,24 @@ async fn send_event(socket: &mut WebSocket, event: serde_json::Value) {
     let _ = socket.send(Message::Text(event.to_string())).await;
 }
 
+/// Engine assets must always revalidate: a stale cached .siv binary runs
+/// the previous fingerprint math against a current catalog and produces
+/// zero hash collisions (found the hard way).
+async fn no_cache_engine_assets(
+    uri: axum::http::Uri,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    if uri.path().starts_with("/wasm/") || uri.path().ends_with(".wasm") {
+        res.headers_mut().insert(
+            "Cache-Control",
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+    }
+    res
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -376,6 +394,7 @@ async fn main() {
         .route("/v1/identify/:session_id", get(ws_identify))
         .route("/v1/recordings/:id", get(get_recording))
         .fallback_service(ServeDir::new(&web_dir).append_index_html_on_directories(true))
+        .layer(axum::middleware::from_fn(no_cache_engine_assets))
         .with_state(state);
 
     let addr = std::env::var("SIVANA_ADDR").unwrap_or_else(|_| "127.0.0.1:8077".into());

@@ -10,8 +10,10 @@ const CATALOG: &str = r"C:\Users\aliza\AppData\Local\Temp\sivana-catalog2";
 
 #[test]
 fn megalovania_excerpt_matches_served_index() {
-    let bytes = std::fs::read(r"C:\Users\aliza\Documents\Portfolio website\out\assets\audio\megalovania.mp3")
-        .expect("read mp3");
+    let bytes = std::fs::read(
+        r"C:\Users\aliza\Documents\Portfolio website\out\assets\audio\megalovania.mp3",
+    )
+    .expect("read mp3");
     let (mono, sr) = sivana_audio::decode::decode_mono(&bytes).expect("decode");
     println!("decoded: {} samples @ {} Hz", mono.len(), sr);
     let pcm = sivana_dsp::resample::resample_linear(&mono, sr, 22_050);
@@ -44,7 +46,10 @@ fn megalovania_excerpt_matches_served_index() {
     println!("query fingerprints: {}", q.len());
     let qfps: Vec<QueryFp> = q
         .iter()
-        .map(|f| QueryFp { hash: f.hash, anchor_time: f.anchor_time })
+        .map(|f| QueryFp {
+            hash: f.hash,
+            anchor_time: f.anchor_time,
+        })
         .collect();
 
     let outcomes = index.query(&qfps, &MatchParams::default());
@@ -59,8 +64,16 @@ fn megalovania_excerpt_matches_served_index() {
         );
     }
     let top = outcomes.first().expect("no candidates at all");
-    assert_eq!(top.recording.as_u32(), 4, "must identify Megalovania (rec 4)");
-    assert!(top.inliers >= 7, "gate would reject: {} inliers", top.inliers);
+    assert_eq!(
+        top.recording.as_u32(),
+        4,
+        "must identify Megalovania (rec 4)"
+    );
+    assert!(
+        top.inliers >= 7,
+        "gate would reject: {} inliers",
+        top.inliers
+    );
 }
 
 /// Local SFP1 decode (mirrors the server decoder).

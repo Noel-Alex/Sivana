@@ -30,3 +30,4 @@ test/
 
 # benchmark outputs
 bench-work/
+apps/web/test-*.mp3

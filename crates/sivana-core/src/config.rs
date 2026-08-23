@@ -180,6 +180,14 @@ impl AlgorithmConfig {
     }
 }
 
+/// The production operating point for log-band quantization (E4): the
+/// only band count with a measured zero-false-accept gate. Ingest, the
+/// browser engine and the matcher MUST all use this value — a split
+/// makes hashes from the two sides mathematically incapable of
+/// colliding (found the hard way: browser queries at the 256-band
+/// default produced literally zero overlap with a 512-band catalog).
+pub const OPERATING_FREQ_BANDS: u16 = 512;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,3 +222,4 @@ mod tests {
         assert!((cfg.frames_per_second() - 22050.0 / 1024.0).abs() < 1e-9);
     }
 }
+

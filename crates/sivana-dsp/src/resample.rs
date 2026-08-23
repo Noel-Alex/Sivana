@@ -142,9 +142,7 @@ pub fn resample_sinc(samples: &[f32], from_hz: u32, to_hz: u32) -> Vec<f32> {
                 } else {
                     (std::f64::consts::PI * cutoff * x).sin() / (std::f64::consts::PI * cutoff * x)
                 };
-                let w = 0.5
-                    * (1.0
-                        + (std::f64::consts::PI * x / (K as f64)).cos());
+                let w = 0.5 * (1.0 + (std::f64::consts::PI * x / (K as f64)).cos());
                 (sinc * w * cutoff) as f32
             })
             .collect()
