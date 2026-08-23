@@ -356,6 +356,7 @@ pub fn run_landmark_v2(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary,
                 .collect::<Vec<_>>(),
         );
     }
+    index.finalize();
     let params = sivana_match::MatchParams::default();
 
     let frames_per_sec_f32 = cfg.frames_per_second() as f32;
