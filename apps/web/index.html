@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SIVANA — A Machine For Finding Sound</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="masthead">
+  <span class="masthead__brand">SIVANA</span>
+  <span class="masthead__issue">ENGINE A · LANDMARK · CATALOG <span id="catalog-version">—</span></span>
+</header>
+
+<main>
+  <!-- ============ HERO / LISTENING ============ -->
+  <section id="stage-hero" class="hero">
+    <p class="kicker">A MACHINE FOR FINDING SOUND</p>
+    <h1 class="hero__headline">Hear&nbsp;it.<br />Name&nbsp;it.</h1>
+
+    <button id="listen-btn" class="listen" aria-label="Start listening">
+      <span class="listen__dot" aria-hidden="true"></span>
+      <span class="listen__label">LISTEN</span>
+    </button>
+
+    <div id="listening-panel" class="listening hidden" aria-live="polite">
+      <p class="listening__question">WHAT ARE WE<br />HEARING?</p>
+      <canvas id="constellation" width="720" height="120" aria-hidden="true"></canvas>
+      <dl class="listening__facts">
+        <div><dt>CAPTURED</dt><dd id="fact-captured">0.00 s</dd></div>
+        <div><dt>LANDMARKS</dt><dd id="fact-landmarks">0</dd></div>
+        <div><dt>SIGNAL</dt><dd id="fact-signal">—</dd></div>
+        <div><dt>STATUS</dt><dd id="fact-status">LISTENING</dd></div>
+      </dl>
+      <button id="stop-btn" class="ghost-btn">STOP</button>
+    </div>
+
+    <p class="hero__sub">
+      Recognition without uploading your raw audio.<br />
+      Built in Rust. Fingerprinted locally.
+    </p>
+  </section>
+
+  <!-- ============ RESULT SPREAD ============ -->
+  <section id="stage-result" class="result hidden" aria-live="polite">
+    <p class="folio">02 / FOUND</p>
+    <hr class="rule" />
+    <div class="result__grid">
+      <figure class="result__art" aria-hidden="true">
+        <div class="result__groove"></div>
+        <figcaption class="result__art-label">SIVANA<br />REFERENCE<br />PRESSING</figcaption>
+      </figure>
+      <div class="result__body">
+        <p class="kicker">THE SONG</p>
+        <h2 id="result-title" class="result__title">—</h2>
+        <p id="result-artist" class="result__artist">—</p>
+        <dl class="result__meta">
+          <div><dt>MATCHED AT</dt><dd id="result-offset">—</dd></div>
+          <div><dt>EVIDENCE</dt><dd id="result-confidence">—</dd></div>
+          <div><dt>RECOGNIZED IN</dt><dd id="result-latency">—</dd></div>
+        </dl>
+        <button id="again-btn" class="ghost-btn">LISTEN AGAIN</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ NO MATCH ============ -->
+  <section id="stage-nomatch" class="nomatch hidden" aria-live="polite">
+    <p class="folio">02 / NOT FOUND</p>
+    <hr class="rule" />
+    <p class="nomatch__line">That sound is not in the catalog — yet.</p>
+    <button id="retry-btn" class="ghost-btn">TRY AGAIN</button>
+  </section>
+
+  <!-- ============ ARCHIVE ============ -->
+  <section id="archive" class="archive hidden">
+    <p class="folio">ARCHIVE</p>
+    <hr class="rule" />
+    <ol id="archive-list" class="archive__list"></ol>
+  </section>
+</main>
+
+<!-- ============ DIAGNOSTICS COLOPHON ============ -->
+<aside id="colophon" class="colophon hidden" aria-label="Recognition diagnostics">
+  <p class="colophon__heading">SYSTEM NOTES / RECOGNITION <span id="colo-session">—</span></p>
+  <pre id="colo-body" class="colophon__body"></pre>
+</aside>
+
+<footer class="colophon-toggle-row">
+  <label class="toggle"><input type="checkbox" id="diag-toggle" /> SYSTEM NOTES</label>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

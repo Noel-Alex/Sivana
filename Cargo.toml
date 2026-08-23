@@ -9,6 +9,7 @@ members = [
     "crates/sivana-match",
     "crates/sivana-index",
     "crates/sivana-wasm",
+    "crates/sivana-api",
     "crates/sivana-bench",
 ]
 
@@ -20,6 +21,7 @@ members = [
 #   crates/sivana-audio   deterministic audio IO + synthetic fixtures
 #   crates/sivana-index   LMDB + .siv mmap index backends (Phase 3)
 #   crates/sivana-wasm    browser fingerprint engine (Phase 4)
+#   crates/sivana-api     Axum recognition service + static site host
 #   crates/sivana-bench   degradation generator + benchmark runner
 #   legacy/               frozen prototype, the control implementation
 
