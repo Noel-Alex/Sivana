@@ -41,6 +41,11 @@ pub struct CaseResult {
     pub offset_frames_matched: Option<i64>,
     pub fingerprint_us: u128,
     pub match_us: u128,
+    // Calibration features (§26); populated by engines that expose raw
+    // matcher evidence, None for the legacy score-only engine.
+    pub score_weight: Option<f32>,
+    pub offset_concentration: Option<f32>,
+    pub margin_over_next: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +53,9 @@ pub struct RejectionCase {
     pub degradation: String,
     pub accepted_by_gate: bool,
     pub best_score: Option<usize>,
+    pub best_inliers: Option<usize>,
+    pub best_concentration: Option<f32>,
+    pub best_margin: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -273,6 +281,9 @@ pub fn run_baseline(
                     offset_frames_matched: offset_matched,
                     fingerprint_us,
                     match_us,
+                    score_weight: None,
+                    offset_concentration: None,
+                    margin_over_next: None,
                 });
                 case_id += 1;
             }
@@ -296,12 +307,18 @@ pub fn run_baseline(
             degradation: deg.id(),
             accepted_by_gate: m.is_some(),
             best_score: m.as_ref().map(|m| m.score),
+            best_inliers: None,
+            best_concentration: None,
+            best_margin: None,
         });
     }
 
     Ok(RunSummary {
         engine: "legacy".into(),
-        fingerprint_version: format!("{:?}", sivana_core::current_fingerprint_version()),
+        fingerprint_version: format!(
+            "{:?}",
+            sivana_core::current_fingerprint_version(sivana_core::EngineId::Legacy)
+        ),
         seed: corpus.seed,
         sample_rate_hz: corpus.sample_rate,
         track_seconds: corpus.duration_s,
@@ -344,11 +361,13 @@ pub use corpus::generate as generate_corpus;
 /// Landmark-V2 engine: streaming DSP + PeaksV2 fingerprints against the
 /// flat rarity-weighted matcher. Same grid, same case semantics as the
 /// legacy runner so results are directly comparable. `freq_bands` selects
-/// the log-band quantization (E3 sweep axis).
+/// the log-band quantization (E3 sweep axis); `params` carries matcher
+/// configuration (offset tolerance etc.) so calibration sweeps can vary it.
 pub fn run_landmark_v2(
     corpus: &Corpus,
     grid: &GridConfig,
     freq_bands: u16,
+    params: sivana_match::MatchParams,
 ) -> Result<RunSummary, String> {
     let cfg = AlgorithmConfig::legacy();
     let lm_cfg = sivana_landmark::LandmarkV2Config {
@@ -386,7 +405,6 @@ pub fn run_landmark_v2(
         );
     }
     index.finalize();
-    let params = sivana_match::MatchParams::default();
 
     let frames_per_sec_f32 = cfg.frames_per_second() as f32;
     let mut cases = Vec::new();
@@ -438,12 +456,17 @@ pub fn run_landmark_v2(
                     && offset_matched
                         .map(|o| (o - expected_offset).abs() <= 2)
                         .unwrap_or(false);
-                // "Gate" analogue for V2: require a few agreeing inliers so
-                // out-of-catalog rejection stays measurable on the same axis.
-                const GATED_MIN_INLIERS: usize = 3;
+                // "Gate" analogue for V2, calibrated in E4: accept iff
+                // rank-1 evidence clears the zero-false-accept operating
+                // point (a=7 inliers, b=0.5 concentration at bands=512).
+                const CALIB_MIN_INLIERS: usize = 7;
+                const CALIB_MIN_CONCENTRATION: f32 = 0.5;
                 let gated = track_hit
                     && best
-                        .map(|o| o.inliers >= GATED_MIN_INLIERS)
+                        .map(|o| {
+                            o.inliers >= CALIB_MIN_INLIERS
+                                && o.offset_concentration >= CALIB_MIN_CONCENTRATION
+                        })
                         .unwrap_or(false);
 
                 cases.push(CaseResult {
@@ -459,6 +482,9 @@ pub fn run_landmark_v2(
                     offset_frames_matched: offset_matched,
                     fingerprint_us,
                     match_us,
+                    score_weight: best.map(|o| o.weighted_score),
+                    offset_concentration: best.map(|o| o.offset_concentration),
+                    margin_over_next: best.map(|o| o.margin_over_next),
                 });
                 case_id += 1;
             }
@@ -485,9 +511,12 @@ pub fn run_landmark_v2(
             degradation: deg.id(),
             accepted_by_gate: outcomes
                 .first()
-                .map(|o| o.inliers >= 5 && o.offset_concentration >= 0.5)
+                .map(|o| o.inliers >= 7 && o.offset_concentration >= 0.5)
                 .unwrap_or(false),
             best_score: outcomes.first().map(|o| o.inliers),
+            best_inliers: outcomes.first().map(|o| o.inliers),
+            best_concentration: outcomes.first().map(|o| o.offset_concentration),
+            best_margin: outcomes.first().map(|o| o.margin_over_next),
         });
     }
 
@@ -497,7 +526,10 @@ pub fn run_landmark_v2(
         } else {
             format!("landmark-v2-b{freq_bands}")
         },
-        fingerprint_version: "v2-32bit".into(),
+        fingerprint_version: format!(
+            "v2-32bit ({:?})",
+            sivana_core::FingerprintVersion::LANDMARK_V2_32BIT
+        ),
         seed: corpus.seed,
         sample_rate_hz: corpus.sample_rate,
         track_seconds: corpus.duration_s,

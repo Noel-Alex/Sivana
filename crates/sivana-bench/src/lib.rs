@@ -11,6 +11,7 @@
 //! emits JSON + markdown reports measuring recall@1, rejection and
 //! latency. New engines plug in beside `legacy` as they are built.
 
+pub mod calibrate;
 pub mod corpus;
 pub mod degradations;
 pub mod report;

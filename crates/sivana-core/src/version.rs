@@ -25,6 +25,10 @@ impl FingerprintVersion {
     /// The legacy hashes are 28-bit values `(f1:10, f2:10, dt:8)`; treat
     /// them as a separate major version from any future 32-bit layout.
     pub const LEGACY: Self = Self::new(0, 1);
+
+    /// Version of the Landmark V2 32-bit hash format
+    /// `(f1:12, f2:12, dt:8)` with log-band quantization.
+    pub const LANDMARK_V2_32BIT: Self = Self::new(1, 0);
 }
 
 /// Identifier of the engine that produced a fingerprint stream.
@@ -51,9 +55,15 @@ impl EngineId {
     }
 }
 
-/// The fingerprint version currently produced by this workspace build.
-pub fn current_fingerprint_version() -> FingerprintVersion {
-    FingerprintVersion::LEGACY
+/// The fingerprint version produced for a given engine by this workspace
+/// build. Major boundaries separate mutually unmatchable formats.
+pub fn current_fingerprint_version(engine: EngineId) -> FingerprintVersion {
+    match engine {
+        EngineId::Legacy => FingerprintVersion::LEGACY,
+        EngineId::LandmarkV2 => FingerprintVersion::LANDMARK_V2_32BIT,
+        // Engine B formats are not produced yet.
+        EngineId::InvariantTriplets | EngineId::InvariantQuads => FingerprintVersion::new(2, 0),
+    }
 }
 
 #[cfg(test)]

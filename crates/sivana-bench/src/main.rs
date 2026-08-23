@@ -29,6 +29,30 @@ enum Command {
         #[arg(long, default_value_t = 2026)]
         seed: u64,
     },
+    /// Sweep acceptance gates over recorded matcher evidence (E4) and
+    /// recommend the operating point with zero false accepts and maximal
+    /// gated recall.
+    Calibrate {
+        #[arg(long, default_value_t = 3)]
+        tracks: usize,
+        #[arg(long, default_value_t = 15.0)]
+        seconds: f32,
+        #[arg(long, default_value_t = 22_050)]
+        sample_rate: u32,
+        #[arg(long, default_value_t = 2026)]
+        seed: u64,
+        #[arg(long, default_value_t = 8.0)]
+        excerpt_seconds: f32,
+        #[arg(long, default_value_t = 2)]
+        positions_per_track: usize,
+        #[arg(long, default_value = "256")]
+        bands: String,
+        /// Comma-separated offset tolerances to evaluate
+        #[arg(long, default_value = "0")]
+        tolerance: String,
+        #[arg(long, default_value = "bench-work/CALIBRATION.md")]
+        out: PathBuf,
+    },
     /// Run the baseline benchmark (legacy engine) and emit reports.
     Run {
         #[arg(long, default_value = "bench-work/baseline.json")]
@@ -58,6 +82,9 @@ enum Command {
         /// Comma-separated V2 log-band counts to sweep (E3), e.g. "64,128,256"
         #[arg(long, default_value = "256")]
         bands: String,
+        /// V2 offset tolerance in frames (§24 bucketing)
+        #[arg(long, default_value_t = 0)]
+        tolerance: i64,
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
@@ -97,6 +124,7 @@ fn main() -> Result<(), String> {
             snr,
             speeds,
             bands,
+            tolerance,
             verbose,
         } => {
             let mut grid = runner::default_grid();
@@ -135,8 +163,16 @@ fn main() -> Result<(), String> {
             }
             let mut v2_runs = Vec::new();
             for bands_n in &band_list {
-                let v2 = runner::run_landmark_v2(&c, grid, *bands_n)
-                    .map_err(|e| format!("landmark-v2 (bands={bands_n}) run failed: {e}"))?;
+                let v2 = runner::run_landmark_v2(
+                    &c,
+                    grid,
+                    *bands_n,
+                    sivana_match::MatchParams {
+                        offset_tolerance_frames: tolerance,
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| format!("landmark-v2 (bands={bands_n}) run failed: {e}"))?;
                 // Single-band runs keep the historical filename; sweeps
                 // suffix each JSON with its band count.
                 let v2_json = if band_list.len() == 1 {
@@ -178,8 +214,79 @@ fn main() -> Result<(), String> {
             println!("wall time: {:.1}s", started.elapsed().as_secs_f64());
             Ok(())
         }
+        Command::Calibrate {
+            tracks,
+            seconds,
+            sample_rate,
+            seed,
+            excerpt_seconds,
+            positions_per_track,
+            bands,
+            tolerance,
+            out,
+        } => {
+            let mut grid = runner::default_grid();
+            grid.excerpt_seconds = excerpt_seconds;
+            grid.positions_per_track = positions_per_track.max(1);
+
+            let c = corpus::generate(tracks, seconds, sample_rate, seed);
+            let band_list = parse_band_list(&bands);
+            if band_list.is_empty() {
+                return Err("no valid band counts in --bands".into());
+            }
+            let tol_list: Vec<i64> = tolerance
+                .split(',')
+                .filter_map(|p| p.trim().parse::<i64>().ok())
+                .filter(|&t| t >= 0)
+                .collect();
+            if tol_list.is_empty() {
+                return Err("no valid tolerances in --tolerance".into());
+            }
+
+            let mut report_md = String::from(
+                "# Gate calibration (E4)\n\nSwept over recorded matcher \
+                 evidence; acceptance uses rank-1 features only.\n\n",
+            );
+            for bands_n in &band_list {
+                for &tol in &tol_list {
+                    let params = sivana_match::MatchParams {
+                        offset_tolerance_frames: tol,
+                        ..Default::default()
+                    };
+                    let summary = runner::run_landmark_v2(&c, &grid, *bands_n, params)
+                        .map_err(|e| format!("landmark-v2 (bands={bands_n}, tol={tol}): {e}"))?;
+                    let points = sivana_bench::calibrate::sweep(&summary, 1..=12, &CONC_STEPS);
+                    println!(
+                        "[bands={bands_n} tol={tol}] recommended: {}",
+                        sivana_bench::calibrate::recommend(&points)
+                            .map(|p| format!(
+                                "a={} b={:.2} recall={:.1}% FA={}/{}",
+                                p.min_inliers,
+                                p.min_concentration,
+                                p.gated_recall * 100.0,
+                                p.false_accepts,
+                                p.rejection_cases
+                            ))
+                            .unwrap_or_else(|| "none (features do not separate)".into())
+                    );
+                    report_md.push_str(&format!("### bands = {bands_n}, tolerance = {tol}\n\n"));
+                    report_md.push_str(&sivana_bench::calibrate::to_markdown(
+                        &summary.engine,
+                        &points,
+                    ));
+                }
+            }
+            std::fs::create_dir_all(out.parent().unwrap_or(std::path::Path::new(".")))
+                .map_err(|e| e.to_string())?;
+            std::fs::write(&out, report_md).map_err(|e| e.to_string())?;
+            println!("calibration table written to {}", out.display());
+            Ok(())
+        }
     }
 }
+
+/// Concentration thresholds swept by `calibrate` (E4).
+const CONC_STEPS: [f32; 10] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 
 fn parse_band_list(s: &str) -> Vec<u16> {
     s.split(',')

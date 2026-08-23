@@ -116,12 +116,19 @@ pub struct MatchOutcome {
     pub recording: RecordingId,
     /// Rarity-weighted vote mass after stop-hash filtering.
     pub weighted_score: f32,
-    /// Votes agreeing exactly with the reported offset (inliers).
+    /// Votes agreeing with the reported offset within the configured
+    /// tolerance (inliers, §24).
     pub inliers: usize,
-    /// Fraction of this candidate's votes at the dominant offset.
+    /// Fraction of this candidate's vote mass inside the tolerance window
+    /// around the dominant offset.
     pub offset_concentration: f32,
-    /// Verified time offset of the recording relative to the query (frames).
+    /// Verified time offset of the recording relative to the query (frames):
+    /// the dominant exact offset inside the winning bucket.
     pub offset_frames: i64,
+    /// `weighted_score` divided by the next candidate's score (rank-1 only
+    /// carries a competitor's ratio; 1.0 when there is no next row). A
+    /// calibration feature (§26).
+    pub margin_over_next: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +138,10 @@ pub struct MatchParams {
     pub stop_hash_df_threshold: u64,
     /// Keep this many candidates for verification.
     pub shortlist_len: usize,
+    /// Offset tolerance in frames (§24): votes whose exact offsets fall in
+    /// a common ±`tolerance` window reinforce each other instead of
+    /// requiring bit-exact alignment. 0 restores exact voting.
+    pub offset_tolerance_frames: i64,
 }
 
 impl Default for MatchParams {
@@ -139,6 +150,9 @@ impl Default for MatchParams {
             // With tiny catalogs everything is rare; tune by sweep later.
             stop_hash_df_threshold: u64::MAX,
             shortlist_len: 5,
+            // E4: tolerance 2 frames maximizes zero-FA gated recall on the
+            // standard grid (75->76.7% at bands=512).
+            offset_tolerance_frames: 2,
         }
     }
 }
@@ -158,10 +172,15 @@ impl InMemoryIndex {
         struct Vote {
             rec: RecordingId,
             bucket: i64,
+            exact: i64,
             weight: f32,
         }
         let mut votes: Vec<Vote> = Vec::with_capacity(query.len() * 8);
         let mut seen_hashes = std::collections::HashSet::new();
+        // Bucket width: with tolerance T, offsets within ±T of each other
+        // share a cell via euclidean division (symmetric around zero).
+        let tol = params.offset_tolerance_frames.max(0);
+        let width = 2 * tol + 1;
 
         for q in query {
             if !seen_hashes.insert(q.hash) {
@@ -177,7 +196,8 @@ impl InMemoryIndex {
                     let offset = p.anchor_time as i64 - q.anchor_time as i64;
                     votes.push(Vote {
                         rec: p.recording,
-                        bucket: offset,
+                        bucket: offset.div_euclid(width),
+                        exact: offset,
                         weight: w,
                     });
                 }
@@ -191,8 +211,8 @@ impl InMemoryIndex {
         // replacement for nested hashmaps (§23 Option A).
         votes.sort_by_key(|v| (v.rec.as_u32(), v.bucket));
 
-        // Per-cell accumulation. Offsets live in a BTreeMap so both the
-        // dominant-offset pick and iteration order are deterministic.
+        // Per-cell accumulation. Exact offsets live in a BTreeMap so both
+        // the dominant-offset pick and range queries are deterministic.
         struct Acc {
             total_weight: f32,
             votes: usize,
@@ -204,13 +224,13 @@ impl InMemoryIndex {
                 Some(((r, b), acc)) if *r == v.rec.as_u32() && *b == v.bucket => {
                     acc.total_weight += v.weight;
                     acc.votes += 1;
-                    let e = acc.offsets.entry(v.bucket).or_insert((0, 0.0));
+                    let e = acc.offsets.entry(v.exact).or_insert((0, 0.0));
                     e.0 += 1;
                     e.1 += v.weight;
                 }
                 _ => {
                     let mut m = BTreeMap::new();
-                    m.insert(v.bucket, (1, v.weight));
+                    m.insert(v.exact, (1, v.weight));
                     accs.push((
                         (v.rec.as_u32(), v.bucket),
                         Acc {
@@ -251,33 +271,69 @@ impl InMemoryIndex {
         });
         rows.truncate(params.shortlist_len);
 
-        rows.into_iter()
+        // Verification per shortlisted cell (§24): pick the dominant exact
+        // offset inside the bucket (max weight; ties to the smaller offset),
+        // then aggregate mass within ±tolerance of it.
+        struct Verified {
+            rec: u32,
+            score: f32,
+            offset: i64,
+            inliers: usize,
+            concentration: f32,
+        }
+        let mut verified: Vec<Verified> = rows
+            .into_iter()
             .map(|(rec_u32, bucket, weight)| {
-                // Verification: dominant exact offset inside the winning
-                // cell. bucket == exact offset today (buckets exist so the
-                // structure survives coarser quantization later); ties go
-                // to the smaller offset via BTreeMap order.
                 let acc = &accs
                     .iter()
                     .find(|((r, b), _)| *r == rec_u32 && *b == bucket)
                     .expect("row must map to an accumulator")
                     .1;
-                let (&best_off, &(count, ow)) = acc
+                // Dominant exact offset: highest weight; ties resolve to
+                // the smaller offset (deterministic, earlier time).
+                let (&best_off, _) = acc
                     .offsets
                     .iter()
                     .max_by(|a, b| {
                         a.1.1
                             .partial_cmp(&b.1.1)
                             .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| b.0.cmp(a.0))
                     })
                     .expect("accumulator non-empty");
-                MatchOutcome {
-                    recording: RecordingId::new(rec_u32),
-                    weighted_score: weight,
-                    inliers: count,
-                    offset_concentration: if weight > 0.0 { ow / weight } else { 0.0 },
-                    offset_frames: best_off,
+                let mut inliers = 0usize;
+                let mut inlier_w = 0.0f32;
+                for (_off, (count, w)) in acc.offsets.range(best_off - tol..=best_off + tol) {
+                    inliers += count;
+                    inlier_w += w;
                 }
+                Verified {
+                    rec: rec_u32,
+                    score: weight,
+                    offset: best_off,
+                    inliers,
+                    concentration: if weight > 0.0 { inlier_w / weight } else { 0.0 },
+                }
+            })
+            .collect();
+
+        verified.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.rec.cmp(&b.rec))
+        });
+        let next_scores: Vec<f32> = verified.iter().skip(1).map(|v| v.score).collect();
+        verified
+            .into_iter()
+            .zip(next_scores.iter().chain(std::iter::once(&0.0)))
+            .map(|(v, next)| MatchOutcome {
+                margin_over_next: if next > &0.0 { v.score / next } else { 1.0 },
+                recording: RecordingId::new(v.rec),
+                weighted_score: v.score,
+                inliers: v.inliers,
+                offset_concentration: v.concentration,
+                offset_frames: v.offset,
             })
             .collect()
     }
@@ -338,7 +394,13 @@ mod tests {
                 anchor_time: 0,
             },
         ];
-        let out = idx.query(&q, &MatchParams::default());
+        let out = idx.query(
+            &q,
+            &MatchParams {
+                offset_tolerance_frames: 0, // this test reasons about exact cells
+                ..MatchParams::default()
+            },
+        );
         assert!(!out.is_empty());
         assert_eq!(out[0].recording, RecordingId::new(0));
         assert_eq!(out[0].offset_frames, 100);
@@ -432,6 +494,86 @@ mod tests {
             out[0].recording,
             RecordingId::new(0),
             "rare-hash mass should dominate"
+        );
+    }
+
+    #[test]
+    fn offset_tolerance_merges_jittered_votes() {
+        // Same hash observed at offsets 100/101/102 in the reference; a
+        // query whose anchor makes those offsets land on 100/101/102 must
+        // aggregate into one candidate with 3 inliers under T=2, while
+        // exact voting (T=0) would split into three single-vote cells.
+        let mut idx = InMemoryIndex::new();
+        idx.add_recording(RecordingId::new(0), &[(1, 110), (2, 111), (3, 112)]);
+        idx.finalize();
+
+        let q = [
+            QueryFp {
+                hash: 1,
+                anchor_time: 10,
+            },
+            QueryFp {
+                hash: 2,
+                anchor_time: 10,
+            },
+            QueryFp {
+                hash: 3,
+                anchor_time: 10,
+            },
+        ];
+        let exact = idx.query(
+            &q,
+            &MatchParams {
+                offset_tolerance_frames: 0,
+                ..MatchParams::default()
+            },
+        );
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].inliers, 1);
+        assert_eq!(exact[0].offset_frames, 100);
+
+        let params = MatchParams {
+            offset_tolerance_frames: 2,
+            ..MatchParams::default()
+        };
+        let tol = idx.query(&q, &params);
+        assert_eq!(tol.len(), 1);
+        assert_eq!(tol[0].inliers, 3, "jittered votes merge under T=2");
+        assert!((tol[0].offset_concentration - 1.0).abs() < 1e-6);
+        assert_eq!(tol[0].offset_frames, 100); // dominant exact offset
+    }
+
+    #[test]
+    fn margin_reflects_competitor_gap() {
+        let mut idx = InMemoryIndex::new();
+        // rec 0 matches two distinct hashes; rec 1 matches one of them.
+        idx.add_recording(RecordingId::new(0), &[(1, 50), (2, 52)]);
+        idx.add_recording(RecordingId::new(1), &[(1, 90)]);
+        idx.finalize();
+        let q = [
+            QueryFp {
+                hash: 1,
+                anchor_time: 0,
+            },
+            QueryFp {
+                hash: 2,
+                anchor_time: 0,
+            },
+        ];
+        let out = idx.query(&q, &MatchParams::default());
+        assert!(out[0].margin_over_next > 1.5, "two votes vs one");
+        assert_eq!(out[1].margin_over_next, 1.0, "no competitor below rank-2");
+
+        let solo = idx.query(
+            &[QueryFp {
+                hash: 2,
+                anchor_time: 0,
+            }],
+            &MatchParams::default(),
+        );
+        assert_eq!(
+            solo[0].margin_over_next, 1.0,
+            "single candidate has no rival"
         );
     }
 

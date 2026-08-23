@@ -94,3 +94,38 @@ Append new entries at the bottom; never delete history.
      confidence-calibration harness — band sweeps alone are exhausted.
 - **Artifacts:** bench-work/baseline.json (legacy),
   baseline.v2-b{64,128,256,512}.json, BASELINE.md, COMPARISON.md.
+
+## E4. Gate calibration: measured operating points (Phase 2)
+
+- **Date:** 2026-08-23
+- **Question:** What acceptance gate maximizes gated recall at zero
+  false accepts, replacing hand-picked thresholds (§26)?
+- **Method:** runner records rank-1 matcher features (inliers, offset
+  concentration) per case + per out-of-catalog probe; `sivana-bench
+  calibrate` sweeps `inliers >= a AND concentration >= b` offline over a ∈
+  [1,12], b ∈ {0.0..0.9}; bands {64,256,512} × offset tolerance {0,2}.
+- **Result (recommended zero-FA points):**
+
+  | bands | tol | gate | gated recall | FA |
+  |---|---:|---|---:|---:|
+  | 64 | any | none exists — coarse hashes cannot separate | — | — |
+  | 256 | 0 | a=9, b=0.90 | 70.0% | 0/10 |
+  | 512 | 0 | a=7, b=0.90 | 75.0% | 0/10 |
+  | **512** | **2** | **a=7, b=0.50** | **76.7%** | **0/10** |
+
+- **Findings:**
+  1. A measured zero-FA gate more than doubles legacy's gated recall at
+     its own zero-FA point (76.7% vs 35%).
+  2. Offset tolerance helps twice over: +1.7% recall AND allows halving
+     the concentration requirement (0.90 -> 0.50).
+  3. Coarse bands (64) have no separating gate at all: their hashes
+     collide across songs, so evidence never separates correct matches
+     from strangers. Fine bands are mandatory once rejection matters.
+- **Decisions:**
+  1. Adopt bands=512 + tolerance=2 + gate(a=7,b=0.5) as the V2 default
+     operating point; MatchParams::default() tolerance now 2.
+  2. Runner gates use the E4 constants; recalibrate after any engine
+     change (the sweep is one command).
+  3. Phase 2 exit criteria met on this grid: calibrated FPR (zero FA at
+     max recall), latency banked, stable rejection.
+- **Artifacts:** bench-work/CALIBRATION.md.
