@@ -29,6 +29,25 @@ enum Command {
         #[arg(long, default_value = "")]
         exclude: String,
     },
+    /// Watch an inbox folder and ingest anything new automatically.
+    /// Idempotent per source hash: files already in the catalog are
+    /// skipped, so leaving this running is safe. New audio lands as a
+    /// delta segment + atomic manifest swap; the query server's watcher
+    /// picks it up within 5 s.
+    Watch {
+        /// Catalog directory.
+        #[arg(long)]
+        catalog: PathBuf,
+        /// Folder to watch for audio files.
+        #[arg(long)]
+        inbox: PathBuf,
+        /// Poll interval in seconds.
+        #[arg(long, default_value_t = 10)]
+        interval: u64,
+        /// Skip names containing these comma-separated substrings.
+        #[arg(long, default_value = "")]
+        exclude: String,
+    },
     /// Merge all active segments into one and prune the rest.
     Compact {
         #[arg(long)]
@@ -68,6 +87,14 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             }
         }
     }
+}
+
+fn chrono_now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .to_string()
 }
 
 fn main() -> Result<(), String> {
@@ -120,6 +147,59 @@ fn main() -> Result<(), String> {
                 println!("segment: {}", seg.display());
             }
             Ok(())
+        }
+        Command::Watch {
+            catalog,
+            inbox,
+            interval,
+            exclude,
+        } => {
+            let skip: Vec<String> = exclude
+                .split(',')
+                .map(|p| p.trim().to_lowercase())
+                .filter(|p| !p.is_empty())
+                .collect();
+            std::fs::create_dir_all(&inbox).map_err(|e| e.to_string())?;
+            println!(
+                "watching {} -> catalog {} (every {}s; Ctrl+C to stop)",
+                inbox.display(),
+                catalog.display(),
+                interval
+            );
+            loop {
+                let files = collect_files(&[inbox.clone()]);
+                let files: Vec<PathBuf> = files
+                    .into_iter()
+                    .filter(|p| {
+                        let name = p
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        !skip.iter().any(|pat| name.contains(pat))
+                    })
+                    .collect();
+                if !files.is_empty() {
+                    match ingest::add_files(&catalog, &files, 0) {
+                        Ok(stats) => {
+                            if !stats.added.is_empty() || !stats.failed.is_empty() {
+                                println!(
+                                    "[{}] added {}, skipped {}, failed {}",
+                                    chrono_now(),
+                                    stats.added.len(),
+                                    stats.skipped,
+                                    stats.failed.len()
+                                );
+                                for (f, e) in &stats.failed {
+                                    eprintln!("  FAILED {f}: {e}");
+                                }
+                            }
+                        }
+                        Err(e) => eprintln!("[{}] ingest error: {e}", chrono_now()),
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(interval.max(1)));
+            }
         }
         Command::Compact { catalog } => {
             let hashes = ingest::compact(&catalog)?;
