@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Sivana",
+  "version": "0.1.0",
+  "description": "Hear it. Name it. Tab-audio recognition fingerprinted locally in Rust/WASM.",
+  "permissions": ["tabCapture", "offscreen", "storage"],
+  "action": {
+    "default_title": "Sivana — listen to this tab",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "offline_enabled": false
+}
