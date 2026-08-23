@@ -435,7 +435,7 @@ mod tests {
         // A degraded excerpt of song 0 plays locally and gets fingerprinted
         // exactly like the browser would: chunked push -> SFP1 -> decode.
         let song = fixtures::synth_song(1000, 15.0, 22_050);
-        let excerpt = fixtures::excerpt(&song, 22_050, 4.0, 6.0);
+        let excerpt = fixtures::excerpt(&song, 22_050, 2.5, 10.0);
         let noisy = sivana_bench::degradations::Degradation::WhiteNoise { snr_db: 10.0 }
             .apply(&excerpt, 22_050, 1);
         let mut engine = FingerprintEngine::new(22_050, cfg.clone());
