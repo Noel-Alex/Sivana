@@ -60,6 +60,12 @@ pub struct RunSummary {
     pub n_tracks: usize,
     pub excerpt_seconds: f32,
     pub config: AlgorithmConfig,
+    /// Engine-specific configuration actually used (V2 landmark config).
+    /// The legacy `config` field predates per-engine configs and stays for
+    /// compatibility; E3 adds this so JSON headers stop misreporting V2
+    /// runs with legacy parameters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landmark_config: Option<serde_json::Value>,
     pub cases: Vec<CaseResult>,
     pub rejection_cases: Vec<RejectionCase>,
 }
@@ -302,6 +308,7 @@ pub fn run_baseline(
         n_tracks: corpus.tracks.len(),
         excerpt_seconds: grid.excerpt_seconds,
         config: cfg,
+        landmark_config: None,
         cases,
         rejection_cases,
     })
@@ -336,14 +343,36 @@ pub use corpus::generate as generate_corpus;
 
 /// Landmark-V2 engine: streaming DSP + PeaksV2 fingerprints against the
 /// flat rarity-weighted matcher. Same grid, same case semantics as the
-/// legacy runner so results are directly comparable.
-pub fn run_landmark_v2(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary, String> {
+/// legacy runner so results are directly comparable. `freq_bands` selects
+/// the log-band quantization (E3 sweep axis).
+pub fn run_landmark_v2(
+    corpus: &Corpus,
+    grid: &GridConfig,
+    freq_bands: u16,
+) -> Result<RunSummary, String> {
     let cfg = AlgorithmConfig::legacy();
     let lm_cfg = sivana_landmark::LandmarkV2Config {
         fft_window: cfg.fft.window_size,
         hop: cfg.fft.hop_size,
+        freq_bands,
         ..Default::default()
     };
+    // Honest engine metadata: record the parameters actually in effect.
+    let landmark_config = serde_json::json!({
+        "fft_window": lm_cfg.fft_window,
+        "hop": lm_cfg.hop,
+        "fanout": lm_cfg.fanout,
+        "dt_min_frames": lm_cfg.dt_min,
+        "dt_max_frames": lm_cfg.dt_max,
+        "freq_bands": lm_cfg.freq_bands,
+        "peaks": {
+            "time_radius": lm_cfg.peaks.time_radius,
+            "freq_radius": lm_cfg.peaks.freq_radius,
+            "min_prominence_db": lm_cfg.peaks.min_prominence_db,
+            "absolute_floor": lm_cfg.peaks.absolute_floor,
+            "max_peaks_per_frame": lm_cfg.peaks.max_peaks_per_frame,
+        },
+    });
 
     // --- Build reference index ---
     let mut index = sivana_match::InMemoryIndex::new();
@@ -463,7 +492,11 @@ pub fn run_landmark_v2(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary,
     }
 
     Ok(RunSummary {
-        engine: "landmark-v2".into(),
+        engine: if freq_bands == 256 {
+            "landmark-v2".into()
+        } else {
+            format!("landmark-v2-b{freq_bands}")
+        },
         fingerprint_version: "v2-32bit".into(),
         seed: corpus.seed,
         sample_rate_hz: corpus.sample_rate,
@@ -471,6 +504,7 @@ pub fn run_landmark_v2(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary,
         n_tracks: corpus.tracks.len(),
         excerpt_seconds: grid.excerpt_seconds,
         config: cfg,
+        landmark_config: Some(landmark_config),
         cases,
         rejection_cases,
     })

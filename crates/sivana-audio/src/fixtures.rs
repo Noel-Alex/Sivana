@@ -16,9 +16,13 @@ const SCALE_SEMITONES: [f32; 12] = [
 
 /// Generate a synthetic song as mono f32 in `[-1, 1]`.
 ///
-/// Distinct seeds produce distinct keys, tempos, progressions and melodic
-/// contours; nearby seeds still share the instrument timbres so that
-/// cross-song confusion is possible (good for false-positive testing).
+/// Distinct seeds produce distinct keys, tempos, progressions, melodic
+/// contours **and instrument timbres** (harmonic mixes, layer balance,
+/// brightness). Shared timbres were tried first and deliberately retired
+/// after E2: they manufactured cross-song hash collisions, making the
+/// false-accept rate an artifact of the fixtures rather than a property
+/// of the algorithm. Residual confusion under these fixtures reflects
+/// actual hash-structure limits.
 pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
     let mut rng = XorShift64Star::new(seed);
     let total = (duration_s * sample_rate as f32) as usize;
@@ -35,6 +39,15 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
         rng.next_u64() % 7,
         rng.next_u64() % 7,
     ];
+
+    // Timbre (E3): per-seed harmonic mix, brightness and layer balance so
+    // two songs never share an instrument identity.
+    let pad_h2 = 0.25 + rng.next_f32() * 0.40; // 2nd-harmonic amplitude
+    let pad_h3 = 0.10 + rng.next_f32() * 0.25; // 3rd-harmonic amplitude
+    let pad_gain = 0.16 + rng.next_f32() * 0.12;
+    let melody_gain = 0.22 + rng.next_f32() * 0.16;
+    let melody_h2 = 0.05 + rng.next_f32() * 0.30; // melody brightness
+    let perc_gain = 0.18 + rng.next_f32() * 0.14;
 
     let mut out = vec![0.0f32; total];
 
@@ -62,12 +75,12 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
             let mut s = 0.0;
             for (ratio, amp) in intervals {
                 let f = chord_root * 2.0_f32.powf(ratio);
-                // Additive saw-ish: fundamental + a few harmonics.
+                // Additive tone: fundamental + seed-mixed harmonics.
                 s += amp
-                    * 0.22
+                    * pad_gain
                     * ((std::f32::consts::TAU * f * ts).sin()
-                        + 0.45 * (std::f32::consts::TAU * f * 2.0 * ts).sin()
-                        + 0.22 * (std::f32::consts::TAU * f * 3.0 * ts).sin());
+                        + pad_h2 * (std::f32::consts::TAU * f * 2.0 * ts).sin()
+                        + pad_h3 * (std::f32::consts::TAU * f * 3.0 * ts).sin());
             }
             *slot += s * env;
         }
@@ -75,7 +88,7 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
         bar_i += 1;
     }
 
-    // --- Melody: eighth notes from the scale, sine with decay envelope ---
+    // --- Melody: eighth notes from the scale, decay envelope ---
     let note_len = beat / 2.0;
     let mut nt = 0.0;
     while nt < duration_s {
@@ -88,7 +101,10 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
             for (k, slot) in out[start..end].iter_mut().enumerate() {
                 let ts = k as f32 / sr;
                 let env = (-ts * 6.0).exp().min(1.0);
-                *slot += 0.30 * env * (std::f32::consts::TAU * f * ts).sin();
+                *slot += melody_gain
+                    * env
+                    * ((std::f32::consts::TAU * f * ts).sin()
+                        + melody_h2 * (std::f32::consts::TAU * f * 2.0 * ts).sin());
             }
         }
         nt += note_len;
@@ -107,7 +123,7 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
                 .enumerate()
             {
                 let env = (-(k as f32 / burst_len as f32) * 7.0).exp();
-                *slot += 0.25 * env * rng.next_bipolar();
+                *slot += perc_gain * env * rng.next_bipolar();
             }
         }
         bt += beat;

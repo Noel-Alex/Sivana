@@ -55,6 +55,9 @@ enum Command {
         /// Comma-separated speed factors, e.g. "0.9,1.05"
         #[arg(long, default_value = "0.90,1.05")]
         speeds: String,
+        /// Comma-separated V2 log-band counts to sweep (E3), e.g. "64,128,256"
+        #[arg(long, default_value = "256")]
+        bands: String,
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
@@ -93,6 +96,7 @@ fn main() -> Result<(), String> {
             positions_per_track,
             snr,
             speeds,
+            bands,
             verbose,
         } => {
             let mut grid = runner::default_grid();
@@ -125,16 +129,33 @@ fn main() -> Result<(), String> {
             let grid = &grid;
             let legacy = runner::run_baseline(&c, grid, &db)
                 .map_err(|e| format!("legacy run failed: {e}"))?;
-            let v2 = runner::run_landmark_v2(&c, grid)
-                .map_err(|e| format!("landmark-v2 run failed: {e}"))?;
+            let band_list = parse_band_list(&bands);
+            if band_list.is_empty() {
+                return Err("no valid band counts in --bands".into());
+            }
+            let mut v2_runs = Vec::new();
+            for bands_n in &band_list {
+                let v2 = runner::run_landmark_v2(&c, grid, *bands_n)
+                    .map_err(|e| format!("landmark-v2 (bands={bands_n}) run failed: {e}"))?;
+                // Single-band runs keep the historical filename; sweeps
+                // suffix each JSON with its band count.
+                let v2_json = if band_list.len() == 1 {
+                    json.with_extension("v2.json")
+                } else {
+                    json.with_extension(format!("v2-b{bands_n}.json"))
+                };
+                report::write_json(&v2, &v2_json)?;
+                v2_runs.push(v2);
+            }
 
             report::write_json(&legacy, &json)?;
-            let v2_json = json.with_extension("v2.json");
-            report::write_json(&v2, &v2_json)?;
             report::write_markdown(&legacy, &markdown)?;
-            report::write_comparison(&[&legacy, &v2], &markdown.with_file_name("COMPARISON.md"))?;
 
-            for s in [&legacy, &v2] {
+            let mut engines: Vec<&runner::RunSummary> = vec![&legacy];
+            engines.extend(v2_runs.iter());
+            report::write_comparison(&engines, &markdown.with_file_name("COMPARISON.md"))?;
+
+            for s in &engines {
                 let agg = s.aggregate();
                 println!(
                     "[{}] cases {} | recall track/offset/gated {:.1}%/{:.1}%/{:.1}% | fp {:.1} ms | match {:.1} ms | false accepts {}/{}",
@@ -158,4 +179,11 @@ fn main() -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn parse_band_list(s: &str) -> Vec<u16> {
+    s.split(',')
+        .filter_map(|p| p.trim().parse::<u16>().ok())
+        .filter(|&b| b > 0 && b.is_power_of_two())
+        .collect()
 }

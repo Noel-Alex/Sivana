@@ -62,3 +62,30 @@ history rather than deleting them.
 | landmark-v2 (first cut, 256 bands) | 63.3% | 41.7% | 63.3% | 13.13 | 0.48 | 10/10 |
 
 Gated semantics differ by engine (legacy score>=100; v2 inliers>=5 AND concentration>=0.5) - treat columns as within-engine trends until confidence calibration unifies them (E2).
+
+## Snapshot - E3: timbre-diverse fixtures + band sweep (2026-08-23)
+
+Corpus regenerated with per-seed timbres (harmonic mix, brightness, layer
+balance), so numbers are NOT directly comparable to earlier snapshots.
+Streaming landmark pipeline + distinct-recording df matcher + prominence
+strength term + quantize_bin fix all included.
+
+```bash
+cargo run -p sivana-bench --release -- run --tracks 3 --seconds 15 \
+  --bands "64,128,256,512"
+```
+
+| engine | track | offset | gated | false accepts | fp ms | match ms |
+|---|---:|---:|---:|---:|---:|---:|
+| legacy | 86.7% | **78.3%** | 35.0% | **0/10** | 2.3 | 9.0 |
+| landmark-v2-b64 | **96.7%** | 60.0% | 96.7% | 10/10 | 10.4 | 0.4 |
+| landmark-v2-b128 | 93.3% | 61.7% | 93.3% | 10/10 | 10.6 | 0.3 |
+| landmark-v2-b256 | 90.0% | 55.0% | 90.0% | 9/10 | 16.3 | 0.4 |
+| landmark-v2-b512 | 93.3% | 56.7% | 91.7% | 3/10 | 16.5 | 0.4 |
+
+Reading: coarse bands maximize degraded-audio recall, fine bands minimize
+false accepts — a dial, not a winner. V2 now beats legacy on identity;
+legacy keeps the offset crown via tolerance its voting implicitly had.
+Fingerprint timings were taken under ~70% background machine load; treat
+ms columns as rough until rerun idle. Next lever: offset-tolerant
+verification + calibrated confidence (Phase 2), not more band tuning.
