@@ -13,4 +13,4 @@ pub mod sliding_max;
 pub mod stft;
 pub mod window;
 
-pub use peaks_v2::Peak;
+pub use peaks_v2::{Peak, PeakStreamer};

@@ -10,4 +10,4 @@
 
 pub mod fingerprinter;
 
-pub use fingerprinter::{Fingerprint32, LandmarkV2Config, fingerprint};
+pub use fingerprinter::{Fingerprint32, LandmarkStreamer, LandmarkV2Config, fingerprint};

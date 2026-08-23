@@ -9,6 +9,8 @@
 //! semantics at linear cost. Edges use truncated windows, matching the
 //! legacy detector's saturating bounds.
 
+use std::collections::VecDeque;
+
 /// Causal sliding max: `out[i] = max input[i+1-w ..= i]`, width `w >= 1`.
 pub fn sliding_max(input: &[f32], w: usize) -> Vec<f32> {
     let mut out = Vec::new();
@@ -25,51 +27,85 @@ pub fn sliding_max_into(input: &[f32], w: usize, out: &mut Vec<f32>) {
         return;
     }
     let w = w.max(1);
-    let mut deque: Vec<usize> = Vec::with_capacity(w.min(n));
+    let mut deque: VecDeque<usize> = VecDeque::with_capacity(w.min(n));
 
     for (i, slot) in out.iter_mut().enumerate() {
-        while let Some(&back) = deque.last() {
+        while let Some(&back) = deque.back() {
             if input[back] <= input[i] {
-                deque.pop();
+                deque.pop_back();
             } else {
                 break;
             }
         }
-        deque.push(i);
+        deque.push_back(i);
         let left = i.saturating_sub(w - 1);
-        while deque[0] < left {
-            deque.remove(0);
+        while deque.front().is_some_and(|&f| f < left) {
+            deque.pop_front();
         }
-        *slot = input[deque[0]];
+        *slot = input[*deque.front().expect("deque non-empty after push")];
     }
 }
 
 /// Centered sliding max: `out[i] = max input[i-r ..= i+r]` with truncated
 /// windows at the edges — exactly the neighborhood the legacy detector scans.
 ///
-/// Composed from two causal passes (left-ending and right-starting), which
-/// keeps every pass a linear monotonic-deque scan:
-/// `centered(i) = max(max input[i-r..i], max input[i..i+r])`.
+/// Composed from two causal monotonic-deque passes (left-ending and
+/// right-starting): `centered(i) = max(max input[i-r..i], max input[i..i+r])`.
+/// The right-starting pass walks the buffer backwards so no reversed copy
+/// is materialized.
 pub fn sliding_max_centered(input: &[f32], radius: usize) -> Vec<f32> {
+    let mut out = Vec::new();
+    sliding_max_centered_into(input, radius, &mut out);
+    out
+}
+
+/// Allocation-reusing centered variant.
+pub fn sliding_max_centered_into(input: &[f32], radius: usize, out: &mut Vec<f32>) {
     let n = input.len();
+    out.clear();
     if n == 0 {
-        return Vec::new();
+        return;
     }
-    let w = radius + 1;
+    let w = radius.max(0) + 1;
+    out.resize(n, f32::NEG_INFINITY);
 
-    // Left pass: L[i] = max input[max(0,i-w+1)..=i] -> covers [i-r, i].
-    let left = sliding_max(input, w);
+    // Forward pass: out[i] = max input[max(0, i-w+1)..=i].
+    let mut fwd: VecDeque<usize> = VecDeque::with_capacity(w.min(n));
+    for i in 0..n {
+        while let Some(&back) = fwd.back() {
+            if input[back] <= input[i] {
+                fwd.pop_back();
+            } else {
+                break;
+            }
+        }
+        fwd.push_back(i);
+        let left = i.saturating_sub(w - 1);
+        while fwd.front().is_some_and(|&f| f < left) {
+            fwd.pop_front();
+        }
+        out[i] = input[*fwd.front().expect("deque non-empty after push")];
+    }
 
-    // Right pass on the reversed signal: R[j] = max rev[max(0,j-w+1)..=j].
-    // With rev[k] = input[n-1-k] and i = n-1-j this is max input[i..=i+r],
-    // truncated at the buffer end — matching legacy edge semantics.
-    let rev: Vec<f32> = input.iter().rev().copied().collect();
-    let right = sliding_max(&rev, w);
-
-    left.iter()
-        .enumerate()
-        .map(|(i, l)| l.max(right[n - 1 - i]))
-        .collect()
+    // Backward pass: right[i] = max input[i..=min(n, i+w)-1]; fold into out.
+    // Iterating downwards puts out-of-window (large) indices at the FRONT
+    // and keeps the running maximum at the front too.
+    let mut bwd: VecDeque<usize> = VecDeque::with_capacity(w.min(n));
+    for i in (0..n).rev() {
+        while let Some(&back) = bwd.back() {
+            if input[back] <= input[i] {
+                bwd.pop_back();
+            } else {
+                break;
+            }
+        }
+        bwd.push_back(i);
+        let right_end = (i + w).min(n);
+        while bwd.front().is_some_and(|&f| f >= right_end) {
+            bwd.pop_front();
+        }
+        out[i] = out[i].max(input[*bwd.front().expect("deque non-empty after push")]);
+    }
 }
 
 #[cfg(test)]
@@ -147,5 +183,18 @@ mod tests {
     fn empty_input_is_safe() {
         assert!(sliding_max_centered(&[], 3).is_empty());
         assert!(sliding_max(&[], 3).is_empty());
+    }
+
+    #[test]
+    fn centered_into_matches_allocating_variant() {
+        let mut rng = XorShift64Star::new(55);
+        for len in [1usize, 3, 17, 129] {
+            let buf: Vec<f32> = (0..len).map(|_| rng.next_bipolar() * 10.0).collect();
+            for r in [0usize, 1, 3, 9] {
+                let mut out = Vec::new();
+                sliding_max_centered_into(&buf, r, &mut out);
+                assert_eq!(out, sliding_max_centered(&buf, r), "len={len} r={r}");
+            }
+        }
     }
 }

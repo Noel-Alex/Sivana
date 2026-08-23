@@ -43,6 +43,42 @@ impl StftStreamer {
         self.frame_index
     }
 
+    /// Feed PCM into the internal buffer. Pull the resulting frames out one
+    /// at a time with [`Self::next_frame`] — this split exists so callers
+    /// can chain streamers without closure-borrow conflicts.
+    pub fn feed(&mut self, samples: &[f32]) {
+        self.tail.extend_from_slice(samples);
+    }
+
+    /// Compute and write the next pending frame's magnitude spectrum into
+    /// `out_mags` (length window/2+1), returning its global frame index,
+    /// or `None` when no full window is buffered. `out_mags` is reused.
+    pub fn next_frame(&mut self, out_mags: &mut Vec<f32>) -> Option<u64> {
+        if self.tail.len() < self.window_size {
+            return None;
+        }
+        for j in 0..self.window_size {
+            self.scratch[j] = Complex::new(self.tail[j] * self.window[j], 0.0);
+        }
+        self.fft.process(&mut self.scratch);
+
+        let bins = self.window_size / 2 + 1;
+        out_mags.clear();
+        if out_mags.capacity() < bins {
+            out_mags.reserve(bins - out_mags.capacity());
+        }
+        for k in 0..bins {
+            out_mags.push(self.scratch[k].norm());
+        }
+
+        // Slide by hop: drop the first hop samples.
+        self.tail.drain(0..self.hop_size);
+
+        let idx = self.frame_index;
+        self.frame_index += 1;
+        Some(idx)
+    }
+
     /// Feed PCM and emit every complete frame's magnitude spectrum into
     /// `out_mags` (length window/2+1), invoking `emit(frame_index, mags)`.
     ///
@@ -53,31 +89,9 @@ impl StftStreamer {
         out_mags: &mut Vec<f32>,
         mut emit: impl FnMut(u64, &[f32]),
     ) {
-        out_mags.clear();
-        if out_mags.capacity() < self.window_size / 2 + 1 {
-            out_mags.reserve(self.window_size / 2 + 1 - out_mags.capacity());
-        }
-
-        // Append incoming samples to the tail buffer.
-        self.tail.extend_from_slice(samples);
-
-        // Emit frames while a full window is available.
-        while self.tail.len() >= self.window_size {
-            for j in 0..self.window_size {
-                self.scratch[j] = Complex::new(self.tail[j] * self.window[j], 0.0);
-            }
-            self.fft.process(&mut self.scratch);
-
-            let bins = self.window_size / 2 + 1;
-            out_mags.clear();
-            for k in 0..bins {
-                out_mags.push(self.scratch[k].norm());
-            }
-            emit(self.frame_index, out_mags);
-            self.frame_index += 1;
-
-            // Slide by hop: drop the first hop samples.
-            self.tail.drain(0..self.hop_size);
+        self.feed(samples);
+        while let Some(idx) = self.next_frame(out_mags) {
+            emit(idx, out_mags);
         }
     }
 }
