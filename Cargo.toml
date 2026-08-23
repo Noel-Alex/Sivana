@@ -10,6 +10,7 @@ members = [
     "crates/sivana-index",
     "crates/sivana-wasm",
     "crates/sivana-api",
+    "crates/sivana-ingest",
     "crates/sivana-bench",
 ]
 

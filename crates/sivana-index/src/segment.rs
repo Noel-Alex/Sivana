@@ -160,6 +160,16 @@ impl SegmentBuilder {
         }
     }
 
+    /// Add one posting directly — used by compaction when replaying
+    /// existing segments.
+    pub fn add_posting(&mut self, hash: u32, recording: RecordingId, anchor_time: u32) {
+        self.recordings.insert(recording.as_u32());
+        self.postings.entry(hash).or_default().push(Posting {
+            recording,
+            anchor_time,
+        });
+    }
+
     /// Serialize to `path` (atomically: write `<path>.tmp`, then rename).
     ///
     /// Postings per hash are sorted and deduplicated in place; document
@@ -383,6 +393,32 @@ impl SivSegment {
         Some(df)
     }
 
+    /// Every hash in the segment, ascending. Used by compaction.
+    ///
+    /// Entries inside `dir[b] .. dir[b+1]` all have high16 == b exactly,
+    /// so walking the directory reconstructs full hashes without storing
+    /// them twice.
+    pub fn all_hashes(&self) -> Vec<u32> {
+        let base = self.entries_base();
+        let limit = (self.header.hash_count as usize) * ENTRY_LEN;
+        let mut out = Vec::with_capacity(self.header.hash_count as usize);
+        for b in 0..DIR_SLOTS - 1 {
+            let start = self.dir_val(b) - base;
+            if start >= limit {
+                break; // no entries remain at or after this bucket
+            }
+            let end = (self.dir_val(b + 1) - base).min(limit);
+            let mut off = start;
+            while off < end {
+                let e = &self.map[base + off..base + off + ENTRY_LEN];
+                let low = u16::from_le_bytes(e[..2].try_into().unwrap()) as u32;
+                out.push(((b as u32) << 16) | low);
+                off += ENTRY_LEN;
+            }
+        }
+        out
+    }
+
     /// Collect every posting for `hash` into `out` (cleared first).
     /// Returns false when absent.
     pub fn lookup(&self, hash: u32, out: &mut Vec<Posting>) -> bool {
@@ -562,5 +598,43 @@ mod tests {
             SivSegment::open(&good),
             Err(OpenError::UnsupportedFormat(99))
         ));
+    }
+}
+
+#[cfg(test)]
+mod iter_tests {
+    use super::*;
+    use sivana_audio::rng::XorShift64Star;
+
+    #[test]
+    fn all_hashes_reconstructs_every_key() {
+        let mut rng = XorShift64Star::new(31415);
+        let mut b = SegmentBuilder::new();
+        let mut expected = std::collections::BTreeSet::new();
+        for rec in 0..4u32 {
+            let fps: Vec<(u32, u32)> = (0..300)
+                .map(|_| {
+                    let h = (rng.next_f32() * 1e9) as u32;
+                    expected.insert(h);
+                    (h, 5u32)
+                })
+                .collect();
+            b.add_recording(RecordingId::new(rec), &fps);
+        }
+        let dir = std::env::temp_dir().join("sivana-index-iter");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("seg.siv");
+        b.build(&path, FingerprintVersion::LEGACY).unwrap();
+        let seg = SivSegment::open(&path).unwrap();
+
+        let got: std::collections::BTreeSet<u32> = seg.all_hashes().into_iter().collect();
+        assert_eq!(got, expected);
+
+        // Every reported hash must actually resolve.
+        let mut out = Vec::new();
+        for &h in got.iter().take(100) {
+            assert!(seg.lookup(h, &mut out), "hash {h:#010x} not resolvable");
+        }
     }
 }

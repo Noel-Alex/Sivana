@@ -2,6 +2,12 @@
 name = "sivana-audio"
 version = "0.1.0"
 edition = "2024"
-description = "Deterministic audio IO (WAV) and synthetic fixture generation for Sivana benchmarks."
+description = "Deterministic audio IO (WAV), synthetic fixtures, and native file decoding for Sivana."
 
 [dependencies]
+# Native file decoding lives here per PLAN §31 ("sivana-audio: native
+# decode") so engine crates stay pure and browser builds never link it.
+symphonia = { version = "0.5", optional = true, features = ["all", "all-codecs"] }
+
+[features]
+decode = ["dep:symphonia"]

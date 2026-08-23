@@ -4,6 +4,7 @@
 //! randomness comes from a seeded xorshift generator, so the same seed
 //! produces bit-identical audio on every platform.
 
+pub mod decode;
 pub mod fixtures;
 pub mod rng;
 pub mod wav;

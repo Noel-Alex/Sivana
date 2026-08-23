@@ -68,3 +68,49 @@ mod tests {
         assert_eq!(change_speed(&[0.3], 2.0), vec![0.3]);
     }
 }
+
+/// Convert sample rate by linear interpolation (deterministic, allocation
+/// sized exactly). Adequate for fingerprint ingestion; a sinc kernel can
+/// replace this if a benchmark ever shows recall loss (PLAN §92).
+pub fn resample_linear(samples: &[f32], from_hz: u32, to_hz: u32) -> Vec<f32> {
+    assert!(from_hz > 0 && to_hz > 0, "sample rates must be positive");
+    if from_hz == to_hz || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let ratio = from_hz as f64 / to_hz as f64;
+    let out_len = ((samples.len() as f64) / ratio).floor().max(1.0) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for k in 0..out_len {
+        let pos = k as f64 * ratio;
+        let i = pos as usize;
+        let frac = (pos - i as f64) as f32;
+        let s = if i + 1 < samples.len() {
+            samples[i] * (1.0 - frac) + samples[i + 1] * frac
+        } else {
+            samples[samples.len() - 1]
+        };
+        out.push(s);
+    }
+    out
+}
+
+#[cfg(test)]
+mod resample_tests {
+    use super::*;
+
+    #[test]
+    fn resample_up_and_down_changes_length_only() {
+        // A 1 kHz tone keeps its shape under 2x down and up sampling.
+        let sr = 44_100u32;
+        let sig: Vec<f32> = (0..sr as usize)
+            .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / sr as f32).sin())
+            .collect();
+        let down = resample_linear(&sig, sr, 22_050);
+        assert_eq!(down.len(), sig.len() / 2);
+        let up = resample_linear(&down, 22_050, 44_100);
+        assert_eq!(up.len(), sig.len());
+        // Peak-to-peak survives.
+        let peak = up.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 0.9, "tone lost amplitude: {peak}");
+    }
+}
