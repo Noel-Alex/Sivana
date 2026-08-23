@@ -183,3 +183,18 @@ speed/pitch/stretch axis
   statistics become meaningful.
 - **Artifacts:** bench-work/baseline.b1.json, baseline.json,
   baseline.v2.json (13-cell grid).
+
+## E6. Neural engine evaluation (Phase 8) — decision record
+
+- **Date:** 2026-08-23
+- **Scope:** §86 evaluation only; no training performed.
+- **Method:** failure classes quantified from E1-E5; neural integration
+  points ranked by failure-class value vs integration cost; runtime and
+  storage cost modeled; explicit trigger criteria defined.
+- **Decision:** defer Engine C. Deterministic engines cover every failure
+  class except playback-rate/pitch shift; B1 owns that class pending its
+  discriminativity fix. Neural work resumes only on trigger T1-T3
+  (see research/NEURAL-EVAL.md), with the E6 measurement protocol fixed
+  in advance so a future implementation is judged against a pre-registered
+  baseline.
+- **Artifacts:** research/NEURAL-EVAL.md.
