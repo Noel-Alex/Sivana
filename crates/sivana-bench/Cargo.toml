@@ -19,6 +19,8 @@ sivana-landmark = { path = "../sivana-landmark" }
 sivana-match = { path = "../sivana-match" }
 sivana-invariant = { path = "../sivana-invariant" }
 sivana-legacy = { path = "../../legacy" }
+sivana-wasm = { path = "../sivana-wasm" }
+tungstenite = "0.24"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = [] }

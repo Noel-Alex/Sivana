@@ -63,6 +63,18 @@ impl RecognitionSession {
         self.started_at.elapsed().as_secs_f32()
     }
 
+    /// Eagerly enforce the capture timeout: a client that stops (or
+    /// finishes) streaming must still get a terminal event instead of
+    /// hanging until its next batch. Called on a timer by the server;
+    /// returns the state after any transition.
+    pub fn poll_timeout(&mut self) -> RecognitionState {
+        if self.state == RecognitionState::Listening && self.capture_seconds() > MAX_CAPTURE_SECONDS
+        {
+            self.state = RecognitionState::NoMatch;
+        }
+        self.state
+    }
+
     /// Ingest one batch and advance the state machine.
     ///
     /// `index` is the active catalog; `params` carries matcher config

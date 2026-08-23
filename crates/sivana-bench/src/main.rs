@@ -53,6 +53,19 @@ enum Command {
         #[arg(long, default_value = "bench-work/CALIBRATION.md")]
         out: PathBuf,
     },
+    /// Drive a running sivana-api with streaming recognition sessions
+    /// and report session-latency percentiles (Phase 10).
+    Loadgen {
+        /// Base WebSocket URL, e.g. ws://127.0.0.1:8077
+        #[arg(long, default_value = "ws://127.0.0.1:8077")]
+        url: String,
+        #[arg(long, default_value_t = 100)]
+        sessions: usize,
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+        #[arg(long, default_value_t = 4242)]
+        seed: u64,
+    },
     /// Run the baseline benchmark (legacy engine) and emit reports.
     Run {
         #[arg(long, default_value = "bench-work/baseline.json")]
@@ -115,6 +128,24 @@ fn main() -> Result<(), String> {
             let c = corpus::generate(tracks, seconds, sample_rate, seed);
             corpus::write_wav_files(&c, &out).map_err(|e| e.to_string())?;
             println!("wrote {} fixtures to {}", c.tracks.len(), out.display());
+            Ok(())
+        }
+        Command::Loadgen {
+            url,
+            sessions,
+            concurrency,
+            seed,
+        } => {
+            let report = sivana_bench::loadgen::run_load(&url, sessions, concurrency, seed)?;
+            println!(
+                "sessions ok={} failed={} | latency p50 {:.1} ms / p95 {:.1} ms / p99 {:.1} ms | wall {:.1}s",
+                report.sessions_ok,
+                report.sessions_failed,
+                report.p50_ms,
+                report.p95_ms,
+                report.p99_ms,
+                report.total_seconds
+            );
             Ok(())
         }
         Command::Run {

@@ -14,5 +14,6 @@
 pub mod calibrate;
 pub mod corpus;
 pub mod degradations;
+pub mod loadgen;
 pub mod report;
 pub mod runner;

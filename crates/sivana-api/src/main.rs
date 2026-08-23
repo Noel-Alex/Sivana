@@ -39,14 +39,28 @@ const MAX_BATCH_BYTES: usize = 256 * 1024;
 /// Idle sessions are dropped after this long.
 const SESSION_TTL: Duration = Duration::from_secs(120);
 
+/// Everything a query needs from the catalog, swapped atomically when
+/// the manifest changes (Phase 10: live catalog updates without restart).
+struct Bundle {
+    index: Arc<InMemoryIndex>,
+    titles: Arc<HashMap<u32, RecordingMeta>>,
+    catalog_version: u64,
+}
+
 #[derive(Clone)]
 struct AppState {
-    index: Arc<InMemoryIndex>,
+    bundle: Arc<std::sync::RwLock<Arc<Bundle>>>,
+    /// Catalog directory watched for manifest swaps (None = static empty).
+    catalog_dir: Option<PathBuf>,
     params: Arc<MatchParams>,
     sessions: Arc<Mutex<HashMap<u64, recognition::RecognitionSession>>>,
     next_session: Arc<std::sync::atomic::AtomicU64>,
-    titles: Arc<HashMap<u32, RecordingMeta>>,
-    catalog_version: u64,
+}
+
+impl AppState {
+    fn snapshot(&self) -> Arc<Bundle> {
+        self.bundle.read().expect("bundle lock poisoned").clone()
+    }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -55,9 +69,7 @@ struct RecordingMeta {
     artist: String,
 }
 
-fn build_index_from_catalog(
-    dir: Option<&PathBuf>,
-) -> (Arc<InMemoryIndex>, HashMap<u32, RecordingMeta>, u64) {
+fn build_bundle(dir: Option<&PathBuf>) -> Bundle {
     let mut index = InMemoryIndex::new();
     let mut titles = HashMap::new();
     let mut version = 0u64;
@@ -112,7 +124,40 @@ fn build_index_from_catalog(
             }
         }
     }
-    (Arc::new(index), titles, version)
+    Bundle {
+        index: Arc::new(index),
+        titles: Arc::new(titles),
+        catalog_version: version,
+    }
+}
+
+/// Background task: watch the catalog manifest and atomically swap the
+/// serving bundle whenever it changes (§21 atomic swaps; §88 matcher
+/// nodes stay up across catalog updates).
+async fn watch_catalog(state: AppState) {
+    let Some(dir) = state.catalog_dir.clone() else {
+        return;
+    };
+    let manifest_path = dir.join(sivana_index::manifest::MANIFEST_FILE);
+    let mut last = std::fs::metadata(&manifest_path)
+        .map(|m| (m.len(), m.modified().ok()))
+        .ok()
+        .unwrap_or((0, None));
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        tick.tick().await;
+        let cur = std::fs::metadata(&manifest_path)
+            .map(|m| (m.len(), m.modified().ok()))
+            .ok()
+            .unwrap_or((0, None));
+        if cur != last {
+            last = cur;
+            println!("manifest changed; reloading catalog...");
+            let bundle = build_bundle(Some(&dir));
+            *state.bundle.write().expect("bundle lock poisoned") = Arc::new(bundle);
+            println!("catalog v{} is now live", state.snapshot().catalog_version);
+        }
+    }
 }
 
 /// Decode an SFP1 batch: returns (sample_rate_hz, fingerprints).
@@ -138,7 +183,7 @@ pub fn decode_sfp_batch(bytes: &[u8]) -> Option<(u32, Vec<(u32, u32)>)> {
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
-        "catalog_version": state.catalog_version,
+        "catalog_version": state.snapshot().catalog_version,
         "engine": "landmark-v2",
     }))
 }
@@ -154,7 +199,8 @@ async fn get_recording(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<u32>,
 ) -> Json<serde_json::Value> {
-    match state.titles.get(&id) {
+    let titles = state.snapshot().titles.clone();
+    match titles.get(&id) {
         Some(m) => Json(serde_json::json!({
             "recording_id": id,
             "title": m.title,
@@ -180,7 +226,33 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
     )
     .await;
 
-    while let Some(Ok(msg)) = socket.recv().await {
+    loop {
+        // Eager timeout tick: evaluate the session clock even when the
+        // client goes quiet, so every session terminates (Phase 10 fix
+        // surfaced by the load generator).
+        let next = tokio::time::timeout(Duration::from_millis(250), socket.recv()).await;
+        let msg = match next {
+            Err(_elapsed) => {
+                let mut sessions = state.sessions.lock().await;
+                if let Some(s) = sessions.get_mut(&session_id) {
+                    if s.poll_timeout() == recognition::RecognitionState::NoMatch {
+                        let capture = s.capture_seconds();
+                        drop(sessions);
+                        send_event(
+                            &mut socket,
+                            serde_json::json!({ "event": "no_match", "capture_seconds": capture }),
+                        )
+                        .await;
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                }
+                continue;
+            }
+            Ok(None) => break,
+            Ok(Some(Err(_))) => break,
+            Ok(Some(Ok(m))) => m,
+        };
         let bytes = match msg {
             Message::Binary(b) => b,
             Message::Close(_) => break,
@@ -207,6 +279,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
         // Expire stale sessions opportunistically.
         sessions.retain(|_, s| s.capture_seconds() < SESSION_TTL.as_secs_f32() * 60.0);
 
+        let bundle = state.snapshot();
         let hop = 1024; // V2 default geometry; client sample rate scales fps_rate
         let session = sessions
             .entry(session_id)
@@ -218,7 +291,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
                     anchor_time: t,
                 })
                 .collect(),
-            &state.index,
+            &bundle.index,
             &state.params,
         );
         let capture = session.capture_seconds();
@@ -227,7 +300,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
         let event = match (new_state, outcome) {
             (recognition::RecognitionState::ConfidentMatch, Some(o)) => {
                 let rec_id = o.recording.as_u32();
-                let title = state.titles.get(&rec_id);
+                let title = bundle.titles.get(&rec_id);
                 serde_json::json!({
                     "event": "matched",
                     "recording_id": rec_id,
@@ -280,21 +353,22 @@ async fn main() {
         .unwrap_or_else(|| PathBuf::from("apps/web"));
 
     let started = Instant::now();
-    let (index, titles, version) = build_index_from_catalog(catalog.as_ref());
+    let bundle = Arc::new(build_bundle(catalog.as_ref()));
     println!(
-        "catalog v{version}: {} hashes indexed in {:.2}s",
-        index.len(),
+        "catalog v{}: {} hashes indexed in {:.2}s",
+        bundle.catalog_version,
+        bundle.index.len(),
         started.elapsed().as_secs_f64()
     );
 
     let state = AppState {
-        index,
+        bundle: Arc::new(std::sync::RwLock::new(bundle)),
+        catalog_dir: catalog.clone(),
         params: Arc::new(MatchParams::default()),
         sessions: Arc::new(Mutex::new(HashMap::new())),
         next_session: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-        titles: Arc::new(titles),
-        catalog_version: version,
     };
+    tokio::spawn(watch_catalog(state.clone()));
 
     let app = Router::new()
         .route("/v1/health", get(health))
