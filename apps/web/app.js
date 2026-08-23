@@ -192,6 +192,12 @@ async function startListening() {
     }
   };
   src.connect(node);
+  // The worklet only taps audio; give it a path to destination (muted)
+  // or Chrome will never pull its process() callback and no batches flow.
+  const mute = state.ctx.createGain();
+  mute.gain.value = 0;
+  node.connect(mute);
+  mute.connect(state.ctx.destination);
   state.startedAt = performance.now();
 }
 
@@ -271,9 +277,15 @@ async function stopListening() {
 
 function tick() {
   if (!state.done && state.startedAt && document.body.classList.contains("state-listening")) {
-    document.getElementById("fact-captured").textContent =
-      ((performance.now() - state.startedAt) / 1000).toFixed(2);
+    const secs = (performance.now() - state.startedAt) / 1000;
+    document.getElementById("fact-captured").textContent = secs.toFixed(2);
     document.getElementById("fact-landmarks").textContent = state.landmarks;
+    if (secs > 2.5 && state.landmarks === 0) {
+      document.getElementById("fact-signal").textContent = "NO INPUT";
+      document.getElementById("fact-status").textContent = "NO MIC SIGNAL - CHECK INPUT DEVICE";
+    } else if (secs > 1 && state.landmarks > 0) {
+      document.getElementById("fact-signal").textContent = "GOOD";
+    }
   }
   requestAnimationFrame(tick);
 }
