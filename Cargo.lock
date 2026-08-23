@@ -1410,6 +1410,7 @@ dependencies = [
  "sivana-audio",
  "sivana-core",
  "sivana-dsp",
+ "sivana-invariant",
  "sivana-landmark",
  "sivana-legacy",
  "sivana-match",
@@ -1460,6 +1461,16 @@ dependencies = [
  "sivana-landmark",
  "sivana-match",
  "sivana-wasm",
+]
+
+[[package]]
+name = "sivana-invariant"
+version = "0.1.0"
+dependencies = [
+ "sivana-audio",
+ "sivana-core",
+ "sivana-dsp",
+ "sivana-match",
 ]
 
 [[package]]

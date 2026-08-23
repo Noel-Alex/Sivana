@@ -11,6 +11,7 @@ members = [
     "crates/sivana-wasm",
     "crates/sivana-api",
     "crates/sivana-ingest",
+    "crates/sivana-invariant",
     "crates/sivana-bench",
 ]
 

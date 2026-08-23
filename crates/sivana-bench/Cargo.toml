@@ -17,6 +17,7 @@ sivana-audio = { path = "../sivana-audio" }
 sivana-dsp = { path = "../sivana-dsp" }
 sivana-landmark = { path = "../sivana-landmark" }
 sivana-match = { path = "../sivana-match" }
+sivana-invariant = { path = "../sivana-invariant" }
 sivana-legacy = { path = "../../legacy" }
 
 [dev-dependencies]

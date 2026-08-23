@@ -129,3 +129,57 @@ Append new entries at the bottom; never delete history.
   3. Phase 2 exit criteria met on this grid: calibrated FPR (zero FA at
      max recall), latency banked, stable rejection.
 - **Artifacts:** bench-work/CALIBRATION.md.
+
+## E5. Engine B1 (scale-invariant triplets) vs Engine A on the
+speed/pitch/stretch axis
+
+- **Date:** 2026-08-23
+- **Question:** Do triplet ratio invariants (§28) beat the landmark pair
+  engine on playback-rate and pitch transformations, and can they meet the
+  zero-false-accept bar?
+- **Method:** new `sivana-invariant` crate — triplets over V2 peaks hashing
+  quantized log-frequency ratios + time-gap ratio (±1-bucket neighbour
+  variants for frame-rounding jitter); candidates shortlisted by hash
+  votes, verified by robust affine fit `t_db = a*t_q + b`. New bench
+  axes: `PitchShift` (resample+WSOLA-restore) and `TimeStretch` (WSOLA,
+  new `sivana-dsp::wsola`). Grid: 13 cells x 6 = 78 cases, seed 2026.
+- **Result (track recall % per cell):**
+
+  | cell | legacy | v2-b512 | b1 |
+  |---|---:|---:|---:|
+  | clean | 100 | 100 | 100 |
+  | clip / echo / hp / lp | 100 | 100 | 50-100 |
+  | pink+10db | 100 | 100 | 33 |
+  | white+10/20db | 100 | 100 | 33 |
+  | speed0.90 | 33 | 67 | 67 |
+  | speed1.05 | 33 | 67 | 67 |
+  | pitch+2st | 33 | — | 67 |
+  | pitch-2st | 67 | — | 33 |
+  | stretch1.10x | 100 | — | 67 |
+
+  Overall: legacy 82.1%, v2-b512 92.3%, b1 65.4% (raw identity).
+  **Rejection: b1 false accepts 13/13 at every plausible gate** before
+  stop-hash filtering; after filtering (§15: hashes present in every
+  recording dropped) rejection evidence falls 8x (max inliers 842 -> 205)
+  but the zero-FA operating point sits at inliers >= 210, yielding only
+  26.9% gated recall with 0% on all transformed cells.
+- **Findings:**
+  1. The invariance mechanism works: b1 is the only engine whose hashes
+     collide across speed/pitch transformations by construction, and it
+     ties/beats v2 on speed0.90 raw identity.
+  2. Discriminativity, not invariance, is the failure: on a 3-track
+     synthetic catalog the effective ~20-bit hash space saturates —
+     out-of-catalog audio amasses hundreds of affine-consistent pairs,
+     overlapping the evidence of genuinely transformed matches.
+  3. WSOLA stretch degrades Engine A far less than resample-speed does
+     (legacy stretch 100% vs speed 33%): pitch is preserved, so pair
+     hashes survive; only dt warps.
+- **Decision: Engine A (Landmark V2) stays the primary engine; B1 is NOT
+  promoted** (§85: choose by measured recall + false accepts). B1 is kept
+  as the experimental fallback with its calibration documented. Next
+  levers, in order: df-weighted rarity for triplets (not just stop-hash),
+  per-band frequency quantization before ratio hashing (kills low-bin
+  rounding sensitivity), and evaluation on >50-track catalogs where df
+  statistics become meaningful.
+- **Artifacts:** bench-work/baseline.b1.json, baseline.json,
+  baseline.v2.json (13-cell grid).

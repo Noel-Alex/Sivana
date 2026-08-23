@@ -100,6 +100,13 @@ impl InMemoryIndex {
         self.n_recordings
     }
 
+    /// Raw posting list for one hash (sorted, deduped after finalize).
+    /// Exposed so alternative scoring schemes (e.g. Engine B's affine
+    /// verification) can reuse this index as pure storage.
+    pub fn postings_for(&self, hash: u32) -> Option<&[Posting]> {
+        self.postings.get(&hash).map(|v| v.as_slice())
+    }
+
     /// Rarity weight (§14). The raw formula `ln((N+1)/(df+1))` hits
     /// exactly zero when df == N (hash present in every recording), which
     /// would silence entire tiny catalogs; we floor it at a small epsilon

@@ -79,6 +79,12 @@ enum Command {
         /// Comma-separated speed factors, e.g. "0.9,1.05"
         #[arg(long, default_value = "0.90,1.05")]
         speeds: String,
+        /// Comma-separated pitch shifts in semitones (E5), e.g. "1,-2"
+        #[arg(long, default_value = "")]
+        pitch: String,
+        /// Comma-separated time-stretch factors (E5), e.g. "1.10"
+        #[arg(long, default_value = "")]
+        stretch: String,
         /// Comma-separated V2 log-band counts to sweep (E3), e.g. "64,128,256"
         #[arg(long, default_value = "256")]
         bands: String,
@@ -123,6 +129,8 @@ fn main() -> Result<(), String> {
             positions_per_track,
             snr,
             speeds,
+            pitch,
+            stretch,
             bands,
             tolerance,
             verbose,
@@ -141,6 +149,14 @@ fn main() -> Result<(), String> {
             for f in parse_list(&speeds) {
                 if f > 0.0 {
                     degs.push(Degradation::Speed { factor: f });
+                }
+            }
+            for st in parse_list(&pitch) {
+                degs.push(Degradation::PitchShift { semitones: st });
+            }
+            for f in parse_list(&stretch) {
+                if f > 0.0 {
+                    degs.push(Degradation::TimeStretch { factor: f });
                 }
             }
             degs.push(Degradation::LowPass { cutoff_hz: 3000.0 });
@@ -184,11 +200,16 @@ fn main() -> Result<(), String> {
                 v2_runs.push(v2);
             }
 
+            let b1 = runner::run_invariant_b1(&c, grid)
+                .map_err(|e| format!("invariant-b1 run failed: {e}"))?;
+            report::write_json(&b1, &json.with_extension("b1.json"))?;
+
             report::write_json(&legacy, &json)?;
             report::write_markdown(&legacy, &markdown)?;
 
             let mut engines: Vec<&runner::RunSummary> = vec![&legacy];
             engines.extend(v2_runs.iter());
+            engines.push(&b1);
             report::write_comparison(&engines, &markdown.with_file_name("COMPARISON.md"))?;
 
             for s in &engines {

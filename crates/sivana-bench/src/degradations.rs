@@ -12,32 +12,43 @@ use sivana_dsp::noise::{self, NoiseColor};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Degradation {
     None,
-    Gain { db: f32 },
-    Clip { threshold: f32 },
-    WhiteNoise { snr_db: f32 },
-    PinkNoise { snr_db: f32 },
-    LowPass { cutoff_hz: f32 },
-    HighPass { cutoff_hz: f32 },
-    Echo { delay_s: f32, gain: f32 },
-    Speed { factor: f32 },
+    Gain {
+        db: f32,
+    },
+    Clip {
+        threshold: f32,
+    },
+    WhiteNoise {
+        snr_db: f32,
+    },
+    PinkNoise {
+        snr_db: f32,
+    },
+    LowPass {
+        cutoff_hz: f32,
+    },
+    HighPass {
+        cutoff_hz: f32,
+    },
+    Echo {
+        delay_s: f32,
+        gain: f32,
+    },
+    Speed {
+        factor: f32,
+    },
+    /// Pitch shift in semitones at constant tempo: resample (pitch+speed)
+    /// then WSOLA-stretch back to the original duration (§49).
+    PitchShift {
+        semitones: f32,
+    },
+    /// Time stretch at constant pitch via WSOLA (§49).
+    TimeStretch {
+        factor: f32,
+    },
 }
 
 impl Degradation {
-    /// Short stable identifier used in reports and CLI grids.
-    pub fn id(&self) -> String {
-        match self {
-            Self::None => "clean".into(),
-            Self::Gain { db } => format!("gain{db:+.0}db"),
-            Self::Clip { threshold } => format!("clip{threshold:.2}"),
-            Self::WhiteNoise { snr_db } => format!("white{snr_db:+.0}db"),
-            Self::PinkNoise { snr_db } => format!("pink{snr_db:+.0}db"),
-            Self::LowPass { cutoff_hz } => format!("lp{cutoff_hz:.0}"),
-            Self::HighPass { cutoff_hz } => format!("hp{cutoff_hz:.0}"),
-            Self::Echo { delay_s, gain } => format!("echo{delay_s:.2}s@{gain:.1}"),
-            Self::Speed { factor } => format!("speed{factor:.2}"),
-        }
-    }
-
     /// Apply to mono samples; returns a fresh buffer (input untouched).
     pub fn apply(&self, samples: &[f32], sample_rate: u32, rng_salt: u64) -> Vec<f32> {
         match self {
@@ -91,6 +102,35 @@ impl Degradation {
                 out
             }
             Self::Speed { factor } => sivana_dsp::resample::change_speed(samples, *factor),
+            Self::PitchShift { semitones } => {
+                // Resampling by r scales pitch by r and speed by r; WSOLA
+                // with factor 1/r restores duration, leaving pitch shifted.
+                let r = 2.0f64.powf(*semitones as f64 / 12.0);
+                let resampled = sivana_dsp::resample::change_speed(samples, r as f32);
+                sivana_dsp::wsola::time_stretch(&resampled, sample_rate, 1.0 / r, 15.0)
+            }
+            Self::TimeStretch { factor } => {
+                sivana_dsp::wsola::time_stretch(samples, sample_rate, *factor as f64, 15.0)
+            }
+        }
+    }
+}
+
+impl Degradation {
+    /// Short stable identifier used in reports and CLI grids.
+    pub fn id(&self) -> String {
+        match self {
+            Self::None => "clean".into(),
+            Self::Gain { db } => format!("gain{db:+.0}db"),
+            Self::Clip { threshold } => format!("clip{threshold:.2}"),
+            Self::WhiteNoise { snr_db } => format!("white{snr_db:+.0}db"),
+            Self::PinkNoise { snr_db } => format!("pink{snr_db:+.0}db"),
+            Self::LowPass { cutoff_hz } => format!("lp{cutoff_hz:.0}"),
+            Self::HighPass { cutoff_hz } => format!("hp{cutoff_hz:.0}"),
+            Self::Echo { delay_s, gain } => format!("echo{delay_s:.2}s@{gain:.1}"),
+            Self::Speed { factor } => format!("speed{factor:.2}"),
+            Self::PitchShift { semitones } => format!("pitch{semitones:+.1}st"),
+            Self::TimeStretch { factor } => format!("stretch{factor:.2}x"),
         }
     }
 }
