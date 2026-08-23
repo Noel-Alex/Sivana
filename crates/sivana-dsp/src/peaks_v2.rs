@@ -190,6 +190,13 @@ impl PeakStreamer {
 
         self.cand_scratch.clear();
         for b in 0..self.f_len {
+            let m = self.mag_ring[base][b];
+            // Cheap pre-filter: a 2D window maximum must equal its own
+            // frequency-row max first. This skips the 2r+1-row vertical
+            // scan for ~90% of cells at default radii.
+            if m != self.fmap_ring[base][b] {
+                continue;
+            }
             let mut vmax = f32::NEG_INFINITY;
             for slot in lo..=hi {
                 let v = self.fmap_ring[slot][b];
@@ -197,7 +204,6 @@ impl PeakStreamer {
                     vmax = v;
                 }
             }
-            let m = self.mag_ring[base][b];
             if m != vmax {
                 continue; // not the window maximum
             }
