@@ -19,11 +19,17 @@ use sivana_match::{InMemoryIndex, MatchOutcome, MatchParams, QueryFp};
 
 /// Calibrated zero-false-accept gate (E4: bands=512, tol=2).
 pub const GATE_MIN_INLIERS: usize = 7;
-/// E8: same-franchise catalogs produce cross-track collisions whose
-/// inlier counts overlap true matches; the winner's margin over the
-/// runner-up separates cleanly (false accepts <= 1.8, true >= 3.0 on
-/// measured DELTARUNE probes).
-pub const GATE_MIN_MARGIN: f32 = 2.5;
+/// E8/E10: same-franchise catalogs produce cross-track collisions whose
+/// inlier counts, concentration, uniqueness and even span all overlap
+/// true matches; only the winner's margin over the runner-up separates
+/// them. Measured on REAL audio (E10 live-capture sweep, 9 Toby Fox
+/// tracks x 15 positions x 3 durations): every observed false accept
+/// landed at margin 2.52-2.80, while true matches scored >= 3.79 except
+/// a single outlier at 2.75. The previous 2.5 floor sat INSIDE the
+/// false-accept band and let wrong songs win in production. 3.0 clears
+/// the entire measured false band; the price is the one 2.75 true case
+/// (a rare miss beats a confident wrong answer).
+pub const GATE_MIN_MARGIN: f32 = 3.0;
 pub const GATE_MIN_CONCENTRATION: f32 = 0.5;
 /// Robustness-contract verifier floor: at least this many DISTINCT query
 /// hashes must align with the winning candidate. A single hash repeating

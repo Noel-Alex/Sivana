@@ -253,3 +253,56 @@ speed/pitch/stretch axis
     below half of true-match evidence before implementation begins.
 - **Artifacts:** `sivana-bench e9 --tracks 12 --seconds 20` (deterministic,
   reproducible via seed 2026).
+
+## E10. Live false accepts on real audio — margin gate recalibration
+
+- **Date:** 2026-08-25
+- **Question:** The E4/E8-calibrated gate (margin >= 2.5) produced
+  confident WRONG answers in production: playing MEGALOVANIA returned
+  hopes-and-dreams, and out-of-catalog tracks (my-castle-town,
+  petal-dance) matched as hopes-and-dreams. Where does the gate actually
+  fail on real audio?
+- **Method:** Full live-capture evidence sweep through the production
+  stack (browser wasm fingerprinter -> WS session -> server gate): 9 real
+  Toby Fox tracks (7 ingested + 2 held out), starts {0,30,60,90,120}s x
+  durations {4,6,10}s = ~135 cases, each labelled TRUE / FALSE / MISS /
+  REJECT from the final session event. Recorded every terminal event's
+  verifier features.
+- **Result:** All 7 in-catalog tracks self-match correctly at every
+  tested position (ingest, index, metadata all sound). Every observed
+  FALSE accept came from OUT-of-catalog audio winning as
+  hopes-and-dreams or MEGALOVANIA with weak-but-gate-clearing evidence:
+
+  | case | inliers | conc | uniq | span | margin |
+  |---|---:|---:|---:|---:|---:|
+  | petal-dance->h&d @0 | 25 | 1.00 | 25 | 30 | 2.72 |
+  | petal-dance->h&d @60 | 12 | 0.57 | 12 | 27 | 2.52 |
+  | castle-town->h&d @0 | 15 | 1.00 | 15 | 9 | 2.80 |
+  | castle-town->h&d @90 | 20 | 0.70 | 20 | 66 | 2.57 |
+  | castle-town->h&d @120 | 12 | 0.67 | 12 | 32 | 2.57 |
+
+  Weakest TRUE matches: core@60 margin **2.75**, everything else >= 3.79.
+- **Findings:**
+  1. Root cause is the same-franchise collision mode E8 identified, now
+     observed at production scale: Toby Fox tracks share instrumentation
+     and arrangement style, so out-of-catalog audio accumulates aligned
+     hash collisions against the *most fingerprint-dense* catalog track.
+     Margin sits just above the old floor; the server locks in a
+     terminal ConfidentMatch before stronger evidence arrives.
+  2. Margin ALONE cannot separate the worst cases: false 2.72 vs true
+     2.75 overlap. But concentration (0.57–1.00), uniqueness (=inliers),
+     and span (9–66) of the false accepts are all indistinguishable
+     from true matches too — no secondary feature rescues the 2.75 true
+     outlier without re-admitting measured false accepts.
+  3. The distributions DO separate with one exception: false band
+     [2.52, 2.80], true mass [2.75, ∞) but only one true point below
+     3.79. A floor of 3.0 rejects all five false accepts and trades away
+     exactly one weak true case.
+- **Decision: GATE_MIN_MARGIN 2.5 -> 3.0.** A rare miss (the query can
+  still succeed with more capture time or a cleaner excerpt) beats a
+  confident wrong answer, which destroys product trust. Documented as an
+  accepted tradeoff; revisit if real-world recall complaints appear at
+  margins in [2.75, 3.0).
+- **Artifacts:** sweep harness + raw JSON in job tmp dir;
+  recognition.rs carries the calibrated constants with rationale.
+
