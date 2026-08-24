@@ -4,20 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sivana-core = { path = "../sivana-core" }
 sivana-landmark = { path = "../sivana-landmark" }
 sivana-match = { path = "../sivana-match" }
 sivana-index = { path = "../sivana-index" }
+sivana-ingest = { path = "../sivana-ingest" }
 
 [dev-dependencies]
 sivana-audio = { path = "../sivana-audio" }
 sivana-bench = { path = "../sivana-bench" }
 sivana-dsp = { path = "../sivana-dsp" }
-sivana-ingest = { path = "../sivana-ingest" }
 sivana-wasm = { path = "../sivana-wasm" }
