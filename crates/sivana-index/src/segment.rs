@@ -344,6 +344,18 @@ impl SivSegment {
             hash_count: u64::from_le_bytes(map[20..28].try_into().unwrap()),
             posting_count: u64::from_le_bytes(map[28..36].try_into().unwrap()),
         };
+        // Header-derived lengths are untrusted: a corrupt or hostile count
+        // must be rejected before any derived slice indexes past the
+        // mapping, and the multiply itself must not overflow (found by the
+        // fuzz-lite sweep). The entries region must fit inside the file.
+        let entries_len = header
+            .hash_count
+            .checked_mul(ENTRY_LEN as u64)
+            .ok_or(OpenError::BadMagic)?;
+        let entries_end = HEADER_LEN + DIR_LEN + entries_len as usize;
+        if entries_end > map.len() {
+            return Err(OpenError::BadMagic);
+        }
         let expected = u32::from_le_bytes(map[36..40].try_into().unwrap());
         let found = body_checksum(&map);
         if found != expected {
