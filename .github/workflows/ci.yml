@@ -32,3 +32,11 @@ jobs:
           cargo check -p sivana-wasm --target wasm32-unknown-unknown
       - name: Benchmark smoke (Phase 0 exit criteria)
         run: cargo run -p sivana-bench --release -- run --tracks 2 --seconds 8
+
+  wasm-asset-sync:
+    name: verify wasm assets in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: verify wasm assets in sync
+        run: bash scripts/wasm-sync-check.sh
