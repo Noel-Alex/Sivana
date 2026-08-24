@@ -25,6 +25,13 @@ pub const GATE_MIN_INLIERS: usize = 7;
 /// measured DELTARUNE probes).
 pub const GATE_MIN_MARGIN: f32 = 2.5;
 pub const GATE_MIN_CONCENTRATION: f32 = 0.5;
+/// Robustness-contract verifier floor: at least this many DISTINCT query
+/// hashes must align with the winning candidate. A single hash repeating
+/// at many query times can stack up inliers in repetitive audio without
+/// adding identity; uniqueness cannot be inflated that way. The E4/E8
+/// probes all carried >=5 unique aligned hashes, so the floor sits well
+/// below real-match evidence while killing degenerate one-hash votes.
+pub const GATE_MIN_UNIQUE_ALIGNED: usize = 4;
 /// Looser bar for surfacing an interim CANDIDATE.
 const CANDIDATE_MIN_INLIERS: usize = 4;
 const CANDIDATE_MIN_CONCENTRATION: f32 = 0.3;
@@ -153,6 +160,7 @@ impl RecognitionSession {
                 index.n_recordings() >= 2 && top.margin_over_next >= GATE_MIN_MARGIN;
             if top.inliers >= GATE_MIN_INLIERS
                 && top.offset_concentration >= GATE_MIN_CONCENTRATION
+                && top.unique_aligned >= GATE_MIN_UNIQUE_ALIGNED
                 && margin_passes
             {
                 self.state = RecognitionState::ConfidentMatch;
