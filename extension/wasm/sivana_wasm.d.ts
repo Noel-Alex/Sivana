@@ -5,8 +5,9 @@
 export class WasmFingerprinter {
   free(): void;
 /**
-* Create an engine for mono PCM at `sample_rate_hz` using default
-* V2 landmark parameters.
+* Create an engine for mono PCM at `sample_rate_hz` using the
+* production operating point (E4: 512 log bands — MUST match the
+* ingest configuration or hashes cannot collide).
 * @param {number} sample_rate_hz
 */
   constructor(sample_rate_hz: number);

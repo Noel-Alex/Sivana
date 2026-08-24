@@ -12,9 +12,14 @@
 //! GET  /v1/health                -> liveness + catalog version
 //! ```
 //!
-//! Security posture (§39): sessions are capped, batches are size-limited,
-//! and only the trailing fingerprint window is kept per session. The
-//! server never sees raw audio.
+//! Security posture (§39): at most `MAX_CONCURRENT_SESSIONS` (= 32)
+//! recognition sessions run concurrently, and session creation plus WS
+//! identify connections are fixed-window rate limited per client IP.
+//! Batches are size-limited, and only the trailing fingerprint window is
+//! kept per session. Uploads (`POST /v1/recordings`) are gated by an
+//! optional shared secret: start the server with `--ingest-token <secret>`
+//! and present it as `Authorization: Bearer <token>` or a `token` multipart
+//! field. The server never sees raw audio.
 
 mod recognition;
 
@@ -701,7 +706,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
 
         let mut sessions = state.sessions.lock().await;
         // Expire stale sessions opportunistically.
-        sessions.retain(|_, s| s.capture_seconds() < SESSION_TTL.as_secs_f32() * 60.0);
+        sessions.retain(|_, s| s.capture_seconds() < SESSION_TTL.as_secs_f32());
 
         let bundle = state.snapshot();
         let hop = 1024; // V2 default geometry; client sample rate scales fps_rate
@@ -815,6 +820,40 @@ async fn no_cache_engine_assets(
     res
 }
 
+/// Minimal permissive CORS for localhost use. The Chrome extension's
+/// offscreen document runs on a chrome-extension:// origin, so its session
+/// POST is cross-origin and the browser preflights/blocks it unless the
+/// server answers with CORS headers. Dev-server posture: allow everything.
+async fn cors_allow_local(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let has_origin = req.headers().contains_key(axum::http::header::ORIGIN);
+    if req.method() == axum::http::Method::OPTIONS {
+        let mut res = axum::http::Response::new(axum::body::Body::empty());
+        *res.status_mut() = axum::http::StatusCode::NO_CONTENT;
+        let h = res.headers_mut();
+        h.insert("Access-Control-Allow-Origin", axum::http::HeaderValue::from_static("*"));
+        h.insert(
+            "Access-Control-Allow-Methods",
+            axum::http::HeaderValue::from_static("GET,POST"),
+        );
+        h.insert(
+            "Access-Control-Allow-Headers",
+            axum::http::HeaderValue::from_static("content-type"),
+        );
+        return res;
+    }
+    let mut res = next.run(req).await;
+    if has_origin {
+        res.headers_mut().insert(
+            "Access-Control-Allow-Origin",
+            axum::http::HeaderValue::from_static("*"),
+        );
+    }
+    res
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -868,6 +907,9 @@ async fn main() {
         .fallback_service(ServeDir::new(&web_dir).append_index_html_on_directories(true))
         .layer(axum::middleware::from_fn(no_cache_engine_assets))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        // Outermost: CORS must wrap every route (and preflights) so the
+        // extension's offscreen document can create sessions.
+        .layer(axum::middleware::from_fn(cors_allow_local))
         .with_state(state);
 
     let addr = std::env::var("SIVANA_ADDR").unwrap_or_else(|_| "127.0.0.1:8077".into());
