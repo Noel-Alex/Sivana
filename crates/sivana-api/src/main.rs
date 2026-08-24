@@ -48,6 +48,7 @@ use sivana_ingest::RecordingMetadata;
 use sivana_match::{InMemoryIndex, MatchParams, QueryFp};
 use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
+use tower_http::trace::TraceLayer;
 
 /// Max bytes of one fingerprint batch (a 10 s window is ~2 KB; generous).
 const MAX_BATCH_BYTES: usize = 256 * 1024;
@@ -147,6 +148,8 @@ struct AppState {
     next_session: Arc<std::sync::atomic::AtomicU64>,
     next_upload: Arc<std::sync::atomic::AtomicU64>,
     http_client: reqwest::Client,
+    /// Process start time, reported by /v1/health (§58).
+    started_at: Instant,
 }
 
 impl AppState {
@@ -543,6 +546,7 @@ pub fn decode_sfp_batch(bytes: &[u8]) -> Option<(u32, Vec<(u32, u32)>)> {
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
+        "uptime_seconds": state.started_at.elapsed().as_secs(),
         "catalog_version": state.snapshot().catalog_version,
         "engine": "landmark-v2",
     }))
@@ -865,6 +869,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
             _ => continue,
         };
         if bytes.len() > MAX_BATCH_BYTES {
+            tracing::warn!(session_id, bytes = bytes.len(), "batch rejected: too large");
             send_event(
                 &mut socket,
                 serde_json::json!({ "event": "error", "detail": "batch too large" }),
@@ -873,6 +878,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
             break;
         }
         let Some((sample_rate, fps)) = decode_sfp_batch(&bytes) else {
+            tracing::warn!(session_id, bytes = bytes.len(), "batch rejected: malformed SFP1");
             send_event(
                 &mut socket,
                 serde_json::json!({ "event": "error", "detail": "malformed batch" }),
@@ -902,6 +908,16 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
         );
         let capture = session.capture_seconds();
         let outcome = session.outcome.clone();
+        let session_batches = session.batches;
+        // Evidence snapshot for the §58 log line (borrowed, not moved).
+        let ev = outcome.as_ref().map(|o| {
+            (
+                o.recording.as_u32(),
+                o.inliers,
+                o.offset_concentration,
+                o.margin_over_next,
+            )
+        });
 
         let event = match (new_state, outcome) {
             (recognition::RecognitionState::ConfidentMatch, Some(o)) => {
@@ -961,6 +977,35 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
             _ => serde_json::json!({ "event": "listening", "capture_seconds": capture }),
         };
         drop(sessions);
+        // §58 + robustness contract item 1: persist anonymized evidence
+        // summaries for terminal sessions so real failures (and their
+        // near-miss evidence distributions) are observable in the logs.
+        // Never raw audio, never client identifiers — just the numbers.
+        match new_state {
+            recognition::RecognitionState::ConfidentMatch => {
+                tracing::info!(
+                    session_id,
+                    capture_seconds = capture,
+                    recording_id = ev.map(|e| e.0),
+                    inliers = ev.map(|e| e.1),
+                    concentration = ev.map(|e| e.2),
+                    margin = ev.map(|e| e.3),
+                    "recognition: confident match"
+                );
+            }
+            recognition::RecognitionState::NoMatch => {
+                tracing::info!(
+                    session_id,
+                    capture_seconds = capture,
+                    batches = session_batches,
+                    inliers = ev.map(|e| e.1),
+                    concentration = ev.map(|e| e.2),
+                    margin = ev.map(|e| e.3),
+                    "recognition: no match"
+                );
+            }
+            _ => {}
+        }
         send_event(&mut socket, event).await;
         if new_state == recognition::RecognitionState::ConfidentMatch
             || new_state == recognition::RecognitionState::NoMatch
@@ -1042,6 +1087,10 @@ fn build_router(state: AppState, web_dir: &FsPath) -> Router {
         .route("/v1/recordings", get(list_recordings).post(add_recording))
         .route("/v1/recordings/:id", get(get_recording))
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
+        // §58: one request span per HTTP call (method, path, status,
+        // latency). Clippy's derived ordering is intentional: TraceLayer
+        // wraps the routes, then no-cache, then CORS outermost.
+        .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(no_cache_engine_assets))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         // Outermost: CORS must wrap every route (and preflights) so the
@@ -1052,6 +1101,15 @@ fn build_router(state: AppState, web_dir: &FsPath) -> Router {
 
 #[tokio::main]
 async fn main() {
+    // §58: RUST_LOG-style filtering; default info so request spans and
+    // recognition decisions are visible without configuration.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let args: Vec<String> = std::env::args().collect();
     let catalog = args
         .iter()
@@ -1075,13 +1133,12 @@ async fn main() {
     if let Some(dir) = &catalog {
         std::fs::create_dir_all(dir).expect("create catalog directory");
     }
-    let started = Instant::now();
-    let bundle = Arc::new(build_bundle(catalog.as_ref()));
-    println!(
+    let started_at = Instant::now();
+    let bundle = Arc::new(build_bundle(catalog.as_ref()));    println!(
         "catalog v{}: {} hashes indexed in {:.2}s",
         bundle.catalog_version,
         bundle.index.len(),
-        started.elapsed().as_secs_f64()
+        started_at.elapsed().as_secs_f64()
     );
 
     let state = AppState {
@@ -1098,6 +1155,7 @@ async fn main() {
             .user_agent("Sivana/0.1 local catalog")
             .build()
             .expect("build metadata client"),
+        started_at,
     };
     tokio::spawn(watch_catalog(state.clone()));
 
@@ -1145,6 +1203,7 @@ mod tests {
             next_session: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_upload: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             http_client: reqwest::Client::new(),
+            started_at: Instant::now(),
         }
     }
 
