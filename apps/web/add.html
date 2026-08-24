@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#e3e8e4" />
+  <title>Sivana — Add to the Index</title>
+  <link rel="stylesheet" href="/styles.css?v=20260824-4" />
+</head>
+<body class="add-page">
+  <div class="folio-rail" aria-hidden="true">
+    <span>SVN / CATALOG INTAKE</span>
+    <span>VOL. 01</span>
+  </div>
+
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Sivana home">SIVANA<span class="brand-mark">/</span></a>
+    <p class="issue">
+      <span>Catalog intake desk</span>
+      <span>Engine A · Catalog <b id="catalog-version">—</b></span>
+    </p>
+    <nav class="mastnav" aria-label="Primary navigation">
+      <a class="navlink" href="/"><span class="navlink__long">Live recognition</span><span class="navlink__short">Listen</span> <span aria-hidden="true">↙</span></a>
+      <a class="navlink navlink--add is-current" href="/add.html" aria-label="Add to index" aria-current="page">
+        <span class="navlink__long">Add to index</span><span class="navlink__plus" aria-hidden="true">＋</span>
+      </a>
+    </nav>
+  </header>
+
+  <main class="add-stage">
+    <section class="add-intro" aria-labelledby="add-title">
+      <p class="kicker">One recording, one reference</p>
+      <h1 id="add-title" class="add-title"><span>Feed the</span><span>index.</span></h1>
+      <p class="add-dek">Drop the audio Sivana should recognize. A YouTube Music link supplies the title, artist, and artwork; the original audio is discarded after its fingerprint is written.</p>
+    </section>
+
+    <form id="ingest-form" class="intake-form" novalidate>
+      <section class="reference-panel" aria-labelledby="reference-title">
+        <div class="section-index"><span>01</span><p id="reference-title">Identify the release</p></div>
+        <label class="field-label" for="source-url">YouTube Music link</label>
+        <div class="link-field">
+          <input id="source-url" name="source_url" type="url" inputmode="url" autocomplete="url" placeholder="https://music.youtube.com/watch?v=…" aria-describedby="link-help link-status" />
+          <span aria-hidden="true">↘</span>
+        </div>
+        <p id="link-help" class="field-help">Paste a track link. No title or artist typing required.</p>
+        <p id="link-status" class="field-status" aria-live="polite"></p>
+
+        <article id="metadata-preview" class="metadata-preview hidden" aria-live="polite">
+          <img id="metadata-artwork" alt="" />
+          <div>
+            <p>YouTube Music reference</p>
+            <h2 id="metadata-title">—</h2>
+            <p id="metadata-artist">—</p>
+          </div>
+          <a id="metadata-source" href="#" target="_blank" rel="noreferrer" aria-label="Open the source on YouTube Music">↗</a>
+        </article>
+      </section>
+
+      <section class="audio-panel" aria-labelledby="audio-title">
+        <div class="section-index"><span>02</span><p id="audio-title">Supply the audio</p></div>
+        <input id="audio-file" name="audio" class="visually-hidden" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.opus,.webm" />
+        <label id="drop-zone" class="drop-zone" for="audio-file">
+          <span class="drop-zone__plus" aria-hidden="true">＋</span>
+          <span class="drop-zone__copy">
+            <strong>Drop a song here</strong>
+            <small>or choose a file · MP3, WAV, FLAC, M4A, AAC, OGG</small>
+          </span>
+        </label>
+        <div id="file-ticket" class="file-ticket hidden" aria-live="polite">
+          <span id="file-kind">AUDIO</span>
+          <div><strong id="file-name">—</strong><small id="file-size">—</small></div>
+          <button id="remove-file" type="button">Remove ×</button>
+        </div>
+      </section>
+
+      <section class="ingest-console" aria-labelledby="create-title">
+        <div>
+          <p class="kicker">Ready when both sides agree</p>
+          <h2 id="create-title">Make it<br />recognizable.</h2>
+        </div>
+        <div class="ingest-console__action">
+          <button id="create-fingerprint" class="listen-btn" type="submit" disabled>
+            <span class="listen-btn__label">Create fingerprint</span>
+            <span class="listen-btn__action" aria-hidden="true">INDEX&nbsp;&nbsp;→</span>
+          </button>
+          <p id="ingest-status" class="ingest-status" aria-live="polite">Add a reference and an audio file to continue.</p>
+        </div>
+      </section>
+    </form>
+
+    <section class="catalog-ledger" aria-labelledby="ledger-title">
+      <div class="catalog-ledger__head">
+        <div>
+          <p class="kicker">Persistent catalog</p>
+          <h2 id="ledger-title">On file</h2>
+        </div>
+        <p id="ledger-count">— recordings</p>
+      </div>
+      <ol id="catalog-list" class="catalog-list"></ol>
+      <p id="catalog-empty" class="catalog-empty">The index is empty. The first track starts here.</p>
+    </section>
+  </main>
+
+  <footer class="statusbar add-statusbar" aria-label="Catalog intake status">
+    <div><span>Input</span><b>LOCAL FILE</b></div>
+    <div><span>Metadata</span><b>YOUTUBE MUSIC</b></div>
+    <div class="statusbar__state"><span>Storage</span><b>FINGERPRINTS + CATALOG</b></div>
+    <p>Raw upload removed after indexing</p>
+  </footer>
+
+  <script type="module" src="/add.js?v=20260824-4"></script>
+</body>
+</html>

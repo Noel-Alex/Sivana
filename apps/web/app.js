@@ -6,8 +6,40 @@ const $ = (id) => document.getElementById(id);
 const state = {
   ws: null, session: null, engine: null, analyser: null,
   landmarks: 0, startedAt: 0, stream: null, ctx: null,
-  anchors: [], done: false, level: 0,
+  anchors: [], done: false, level: 0, deadlineTimer: null, resampler: null,
 };
+
+const CLIENT_LISTENING_LIMIT_MS = 13_000;
+const FINGERPRINT_SAMPLE_RATE = 22_050;
+
+// AudioContext's requested sample rate is only a preference on some devices.
+// Keep the fingerprint geometry identical to ingestion even when the browser
+// delivers microphone PCM at the hardware rate (commonly 44.1 or 48 kHz).
+class StreamingLinearResampler {
+  constructor(inputRate, outputRate) {
+    this.step = inputRate / outputRate;
+    this.position = 0;
+    this.pending = new Float32Array(0);
+  }
+
+  process(input) {
+    if (this.step === 1 && this.pending.length === 0) return input;
+    const data = new Float32Array(this.pending.length + input.length);
+    data.set(this.pending);
+    data.set(input, this.pending.length);
+    const output = [];
+    while (this.position + 1 < data.length) {
+      const i = Math.floor(this.position);
+      const fraction = this.position - i;
+      output.push(data[i] + (data[i + 1] - data[i]) * fraction);
+      this.position += this.step;
+    }
+    const consumed = Math.floor(this.position);
+    this.pending = data.slice(consumed);
+    this.position -= consumed;
+    return Float32Array.from(output);
+  }
+}
 
 function show(panel) {
   const map = {
@@ -27,99 +59,115 @@ function note(line) {
 }
 
 function bindDrawer(btnId, drawerId) {
-  document.getElementById(btnId).addEventListener("click", () => {
+  const button = document.getElementById(btnId);
+  button.addEventListener("click", () => {
     const d = document.getElementById(drawerId);
     d.classList.toggle("open");
+    d.setAttribute("aria-hidden", String(!d.classList.contains("open")));
+    button.setAttribute("aria-expanded", String(d.classList.contains("open")));
     for (const other of ["drawer-archive", "drawer-notes"]) {
-      if (other !== drawerId) document.getElementById(other).classList.remove("open");
+      if (other !== drawerId) {
+        const otherDrawer = document.getElementById(other);
+        otherDrawer.classList.remove("open");
+        otherDrawer.setAttribute("aria-hidden", "true");
+        document.querySelector(`[aria-controls="${other}"]`)?.setAttribute("aria-expanded", "false");
+      }
     }
   });
 }
 bindDrawer("toggle-archive", "drawer-archive");
 bindDrawer("toggle-notes", "drawer-notes");
 
+document.querySelectorAll("[data-close-drawer]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const id = button.dataset.closeDrawer;
+    const drawer = document.getElementById(id);
+    drawer.classList.remove("open");
+    drawer.setAttribute("aria-hidden", "true");
+    document.querySelector(`[aria-controls="${id}"]`)?.setAttribute("aria-expanded", "false");
+  });
+});
+
 const viz = document.getElementById("viz");
 const vctx = viz.getContext("2d");
 let freqData = null;
 
 function resizeViz() {
-  viz.width = window.innerWidth * devicePixelRatio;
-  viz.height = window.innerHeight * devicePixelRatio;
+  const rect = viz.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  viz.width = Math.max(1, Math.round(rect.width * dpr));
+  viz.height = Math.max(1, Math.round(rect.height * dpr));
 }
 window.addEventListener("resize", resizeViz);
 resizeViz();
 
-const BARS = 96;
+const BARS_PER_SIDE = 54;
 
 function drawViz(t) {
-  // Self-heal sizing: hidden panes report 0x0 until first paint.
-  const wantW = Math.max(1, window.innerWidth * devicePixelRatio);
-  const wantH = Math.max(1, window.innerHeight * devicePixelRatio);
+  const rect = viz.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const wantW = Math.max(1, Math.round(rect.width * dpr));
+  const wantH = Math.max(1, Math.round(rect.height * dpr));
   if (viz.width !== wantW || viz.height !== wantH) resizeViz();
   const W = viz.width, H = viz.height;
-  const cx = W / 2, cy = H / 2;
-  const base = Math.min(W, H) * 0.21;
+  const cx = W / 2;
+  const cy = H / 2;
+  const sideWidth = W * 0.485;
+  const step = sideWidth / BARS_PER_SIDE;
+  const maxHeight = H * 0.42;
   vctx.clearRect(0, 0, W, H);
 
-  let levels = new Float32Array(BARS);
+  const levels = new Float32Array(BARS_PER_SIDE);
   if (state.analyser && freqData) {
     state.analyser.getByteFrequencyData(freqData);
     let sum = 0;
-    for (let i = 0; i < BARS; i++) {
-      const bin = Math.floor(Math.pow(i / BARS, 1.6) * freqData.length * 0.75);
+    for (let i = 0; i < BARS_PER_SIDE; i++) {
+      const bin = Math.floor(Math.pow(i / BARS_PER_SIDE, 1.7) * freqData.length * 0.82);
       levels[i] = freqData[bin] / 255;
       sum += levels[i];
     }
-    state.level = state.level * 0.85 + (sum / BARS) * 0.15;
+    state.level = state.level * 0.82 + (sum / BARS_PER_SIDE) * 0.18;
   } else {
-    const idle = 0.06 + 0.04 * Math.sin(t / 900);
-    for (let i = 0; i < BARS; i++) {
-      levels[i] = idle + 0.03 * Math.sin(t / 500 + i * 0.4);
+    const idleMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : t;
+    for (let i = 0; i < BARS_PER_SIDE; i++) {
+      levels[i] = 0.12 + 0.075 * Math.sin(idleMotion / 620 + i * 0.58) + 0.035 * Math.sin(i * 1.7);
     }
   }
 
-  const rot = t / 24000;
-  vctx.save();
-  vctx.translate(cx, cy);
-  vctx.rotate(rot);
-  for (let i = 0; i < BARS; i++) {
-    const a = (i / BARS) * Math.PI * 2;
-    const len = base * (0.12 + levels[i] * 1.15);
-    const x1 = Math.cos(a) * base;
-    const y1 = Math.sin(a) * base;
-    const x2 = Math.cos(a) * (base + len);
-    const y2 = Math.sin(a) * (base + len);
-    const hot = levels[i];
-    vctx.strokeStyle =
-      hot > 0.55 ? "#FF4A1C" : hot > 0.25 ? "rgba(255,74,28,0.75)" : "rgba(243,237,227,0.28)";
-    vctx.lineWidth = Math.max(1.5, (W / 1400) * 2.2);
-    vctx.beginPath();
-    vctx.moveTo(x1, y1);
-    vctx.lineTo(x2, y2);
-    vctx.stroke();
+  vctx.strokeStyle = "rgba(17,19,15,0.48)";
+  vctx.lineWidth = Math.max(1, W / 1800);
+  vctx.beginPath();
+  vctx.moveTo(0, cy);
+  vctx.lineTo(W, cy);
+  vctx.stroke();
+
+  for (let i = 0; i < BARS_PER_SIDE; i++) {
+    const energy = Math.max(0.025, levels[i]);
+    const len = Math.max(2 * dpr, energy * maxHeight);
+    const hot = energy > 0.56;
+    vctx.strokeStyle = hot ? "#ff5e3a" : energy > 0.24 ? "#2447d8" : "rgba(17,19,15,0.52)";
+    vctx.lineWidth = Math.max(1, Math.min(3, step * 0.28));
+    for (const direction of [-1, 1]) {
+      const x = cx + direction * (i + 0.75) * step;
+      const asymmetry = 0.7 + 0.3 * Math.sin(i * 2.31);
+      const top = len * (direction === 1 ? 1 : asymmetry);
+      const bottom = len * (direction === -1 ? 1 : asymmetry);
+      vctx.beginPath();
+      vctx.moveTo(x, cy - top);
+      vctx.lineTo(x, cy + bottom);
+      vctx.stroke();
+    }
   }
-  vctx.restore();
 
-  const pulse = 1 + state.level * 0.5;
-  vctx.strokeStyle = "rgba(255,74,28,0.8)";
-  vctx.lineWidth = Math.max(1, (W / 1400) * 1.4);
-  vctx.beginPath();
-  vctx.arc(cx, cy, base * 0.92 * pulse, 0, Math.PI * 2);
-  vctx.stroke();
-
-  vctx.strokeStyle = "rgba(243,237,227,0.12)";
-  vctx.beginPath();
-  vctx.arc(cx, cy, base * 0.8, 0, Math.PI * 2);
-  vctx.stroke();
-
-  vctx.fillStyle = "#FF4A1C";
   for (const blip of state.anchors) {
-    const age = (t - blip.t) / 2600;
+    const age = (t - blip.t) / 1800;
     if (age > 1) continue;
-    const r = base * (1.05 + age * 0.9);
-    const a = blip.a + t / 4000;
+    const direction = blip.a > Math.PI ? -1 : 1;
+    const x = cx + direction * age * sideWidth;
+    const size = Math.max(2, W / 700);
     vctx.globalAlpha = (1 - age) * 0.9;
-    vctx.fillRect(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 2.5, 2.5);
+    vctx.fillStyle = "#ff5e3a";
+    vctx.fillRect(x - size / 2, cy - size * 1.5, size, size * 3);
   }
   vctx.globalAlpha = 1;
 
@@ -146,6 +194,9 @@ async function startListening() {
   document.getElementById("fact-status").textContent = "LISTENING";
 
   const r = await fetch("/v1/sessions", { method: "POST" });
+  if (!r.ok) {
+    throw new Error("recognition service returned HTTP " + r.status);
+  }
   const { session_id } = await r.json();
   state.session = session_id;
 
@@ -157,16 +208,27 @@ async function startListening() {
     note(new Date().toISOString().slice(11, 19) + "  " + JSON.stringify(ev));
     handleServerEvent(ev);
   };
+  state.ws.onclose = () => {
+    state.ws = null;
+    if (!state.done && document.body.classList.contains("state-listening")) {
+      void finishNoMatch("SESSION ENDED");
+    }
+  };
 
   const mod = await import("/wasm/sivana_wasm.js");
   await mod.default();
-  state.engine = new mod.WasmFingerprinter(22050);
-  note("engine: " + state.engine.version());
 
   state.stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
-  state.ctx = new AudioContext({ sampleRate: 22050 });
+  state.ctx = new AudioContext({ sampleRate: FINGERPRINT_SAMPLE_RATE });
+  state.resampler = new StreamingLinearResampler(
+    state.ctx.sampleRate,
+    FINGERPRINT_SAMPLE_RATE,
+  );
+  state.engine = new mod.WasmFingerprinter(FINGERPRINT_SAMPLE_RATE);
+  note("engine: " + state.engine.version());
+  note("audio: " + state.ctx.sampleRate + " Hz -> " + FINGERPRINT_SAMPLE_RATE + " Hz");
 
   const src = state.ctx.createMediaStreamSource(state.stream);
   const analyser = state.ctx.createAnalyser();
@@ -180,7 +242,9 @@ async function startListening() {
   await state.ctx.audioWorklet.addModule("/wasm/pcm-worklet.js");
   const node = new AudioWorkletNode(state.ctx, "sivana-pcm-capture");
   node.port.onmessage = (e) => {
-    const batch = state.engine.process(e.data);
+    const pcm = state.resampler.process(e.data);
+    if (pcm.length === 0) return;
+    const batch = state.engine.process(pcm);
     if (batch && batch.length > 16 && state.ws && state.ws.readyState === 1) {
       const n = new DataView(batch.buffer, batch.byteOffset + 12, 4).getUint32(0, true);
       state.landmarks += n;
@@ -199,6 +263,19 @@ async function startListening() {
   node.connect(mute);
   mute.connect(state.ctx.destination);
   state.startedAt = performance.now();
+  state.deadlineTimer = window.setTimeout(() => {
+    if (!state.done && document.body.classList.contains("state-listening")) {
+      void finishNoMatch();
+    }
+  }, CLIENT_LISTENING_LIMIT_MS);
+}
+
+async function finishNoMatch(status = "NO MATCH") {
+  if (state.done) return;
+  state.done = true;
+  document.getElementById("fact-status").textContent = status;
+  await stopListening();
+  show("no-match");
 }
 
 function handleServerEvent(ev) {
@@ -212,16 +289,32 @@ function handleServerEvent(ev) {
     stopListening();
     renderResult(ev);
   } else if (ev.event === "no_match") {
-    state.done = true;
-    stopListening();
-    document.getElementById("fact-status").textContent = "NO MATCH";
-    show("no-match");
+    void finishNoMatch();
   }
 }
 
 function renderResult(ev) {
-  document.getElementById("result-title").textContent = ev.title || ("Recording " + ev.recording_id);
-  document.getElementById("result-artist").textContent = ev.artist || "Unknown artist";
+  const title = ev.title || ("Recording " + ev.recording_id);
+  const artist = (ev.artist || "Unknown artist").replace(/\s+-\s+Topic$/i, "");
+  const titleEl = document.getElementById("result-title");
+  titleEl.textContent = title;
+  titleEl.classList.toggle("result-title--long", title.length > 18);
+  titleEl.classList.toggle("result-title--very-long", title.length > 30);
+  document.getElementById("result-artist").textContent = artist;
+  document.getElementById("result-record-number").textContent =
+    String(Number(ev.recording_id) + 1).padStart(3, "0");
+
+  const artwork = document.getElementById("result-artwork");
+  const cover = document.getElementById("result-cover");
+  artwork.classList.remove("has-artwork");
+  cover.removeAttribute("src");
+  cover.alt = "";
+  if (ev.artwork_url) {
+    cover.onload = () => artwork.classList.add("has-artwork");
+    cover.onerror = () => artwork.classList.remove("has-artwork");
+    cover.alt = "Cover artwork for " + title;
+    cover.src = ev.artwork_url;
+  }
   const hopSec = 1024 / 22050;
   const secs = ev.offset_frames * hopSec;
   document.getElementById("result-offset").textContent =
@@ -249,7 +342,9 @@ function addToArchive(ev) {
 function renderArchive() {
   const list = JSON.parse(localStorage.getItem("sivana-archive") || "[]");
   const ol = document.getElementById("archive-list");
+  const empty = document.getElementById("archive-empty");
   ol.innerHTML = "";
+  empty.hidden = list.length > 0;
   list.forEach((item, i) => {
     const li = document.createElement("li");
     const idx = document.createElement("span");
@@ -266,34 +361,53 @@ function renderArchive() {
 }
 
 async function stopListening() {
+  if (state.deadlineTimer) {
+    window.clearTimeout(state.deadlineTimer);
+    state.deadlineTimer = null;
+  }
   if (state.ws) { try { state.ws.close(); } catch (e) {} state.ws = null; }
   if (state.stream) {
     for (const t of state.stream.getTracks()) t.stop();
     state.stream = null;
   }
   if (state.ctx) { try { await state.ctx.close(); } catch (e) {} state.ctx = null; }
+  state.resampler = null;
   state.analyser = null;
+  state.startedAt = 0;
 }
 
 function tick() {
   if (!state.done && state.startedAt && document.body.classList.contains("state-listening")) {
     const secs = (performance.now() - state.startedAt) / 1000;
-    document.getElementById("fact-captured").textContent = secs.toFixed(2);
+    const wholeSeconds = Math.floor(secs);
+    document.getElementById("fact-captured").textContent =
+      String(Math.floor(wholeSeconds / 60)).padStart(2, "0") +
+      ":" +
+      String(wholeSeconds % 60).padStart(2, "0");
     document.getElementById("fact-landmarks").textContent = state.landmarks;
     if (secs > 2.5 && state.landmarks === 0) {
       document.getElementById("fact-signal").textContent = "NO INPUT";
       document.getElementById("fact-status").textContent = "NO MIC SIGNAL - CHECK INPUT DEVICE";
     } else if (secs > 1 && state.landmarks > 0) {
       document.getElementById("fact-signal").textContent = "GOOD";
+      if (document.getElementById("fact-status").textContent.startsWith("NO MIC")) {
+        document.getElementById("fact-status").textContent = "BUILDING A MATCH";
+      }
     }
   }
   requestAnimationFrame(tick);
 }
 
 document.getElementById("listen-btn").addEventListener("click", () =>
-  startListening().catch((e) => {
+  startListening().catch(async (e) => {
+    state.done = true;
+    await stopListening();
     note("error: " + e);
-    document.getElementById("fact-status").textContent = "MIC BLOCKED";
+    const permissionDenied =
+      e?.name === "NotAllowedError" ||
+      String(e?.message || e).toLowerCase().includes("permission");
+    document.getElementById("fact-status").textContent =
+      permissionDenied ? "MIC PERMISSION NEEDED" : "RECOGNITION SERVICE OFFLINE";
     show("idle");
   })
 );
