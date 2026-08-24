@@ -1,11 +1,32 @@
-[package]
-name = "Sivana"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "legacy",
+    "crates/sivana-core",
+    "crates/sivana-audio",
+    "crates/sivana-dsp",
+    "crates/sivana-landmark",
+    "crates/sivana-match",
+    "crates/sivana-index",
+    "crates/sivana-wasm",
+    "crates/sivana-api",
+    "crates/sivana-ingest",
+    "crates/sivana-invariant",
+    "crates/sivana-bench",
+]
 
-[dependencies]
-rustfft = "6.3.0"
-symphonia = { version = "0.5.3", features = ["all-formats", "all-codecs"] }
-rubato = "0.16.2"
-rusqlite = { version = "0.31.0", features = ["bundled"] }
-clap = { version = "4.5.4", features = ["derive"] }
+# Sivana — production-grade Rust audio recognition system.
+#
+# Layout (research/PLAN.md §31):
+#   crates/sivana-core    shared fingerprint/version/config types
+#   crates/sivana-dsp     streaming DSP primitives
+#   crates/sivana-audio   deterministic audio IO + synthetic fixtures
+#   crates/sivana-index   LMDB + .siv mmap index backends (Phase 3)
+#   crates/sivana-wasm    browser fingerprint engine (Phase 4)
+#   crates/sivana-api     Axum recognition service + static site host
+#   crates/sivana-bench   degradation generator + benchmark runner
+#   legacy/               frozen prototype, the control implementation
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

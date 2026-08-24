@@ -1,0 +1,30 @@
+[package]
+name = "sivana-bench"
+version = "0.1.0"
+edition = "2024"
+description = "Sivana benchmark platform: degradation matrix, corpus generation, baseline runner and reports."
+
+[[bin]]
+name = "sivana-bench"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sivana-core = { path = "../sivana-core" }
+sivana-audio = { path = "../sivana-audio" }
+sivana-dsp = { path = "../sivana-dsp" }
+sivana-landmark = { path = "../sivana-landmark" }
+sivana-match = { path = "../sivana-match" }
+sivana-invariant = { path = "../sivana-invariant" }
+sivana-legacy = { path = "../../legacy" }
+sivana-wasm = { path = "../sivana-wasm" }
+tungstenite = "0.24"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = [] }
+
+[[bench]]
+name = "fingerprint"
+harness = false

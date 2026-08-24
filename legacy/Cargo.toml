@@ -1,0 +1,20 @@
+[package]
+name = "sivana-legacy"
+version = "0.1.0"
+edition = "2024"
+description = "Frozen prototype Sivana implementation, preserved as the control baseline for all benchmarks."
+
+[lib]
+name = "sivana_legacy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sivana-legacy"
+path = "src/main.rs"
+
+[dependencies]
+rustfft = "6.3.0"
+symphonia = { version = "0.5.3", features = ["all-formats", "all-codecs"] }
+rubato = "0.16.2"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+clap = { version = "4.5.4", features = ["derive"] }

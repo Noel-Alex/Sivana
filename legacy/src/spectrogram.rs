@@ -19,26 +19,30 @@ fn hann_window(window_size: usize) -> Vec<f32> {
     window
 }
 
-pub fn create_spectrogram( // Made public
-                           samples: &[f32],
-                           _sample_rate: u32,
-                           window_size: usize,
-                           hop_size: usize,
+pub fn create_spectrogram(
+    // Made public
+    samples: &[f32],
+    _sample_rate: u32,
+    window_size: usize,
+    hop_size: usize,
 ) -> Vec<Vec<f32>> {
     if samples.len() < window_size {
-        println!("Not enough samples for a full FFT window.");
+        crate::leg_dbg!("Not enough samples for a full FFT window.");
         return vec![];
     }
 
     let num_frames = (samples.len() - window_size) / hop_size + 1;
     if num_frames == 0 {
-        println!("Calculated zero frames. Check sample length, window size, and hop size.");
+        crate::leg_dbg!("Calculated zero frames. Check sample length, window size, and hop size.");
         return vec![];
     }
 
-    println!(
+    crate::leg_dbg!(
         "Debug: create_spectrogram - Samples: {}, Window: {}, Hop: {}, Frames: {}",
-        samples.len(), window_size, hop_size, num_frames
+        samples.len(),
+        window_size,
+        hop_size,
+        num_frames
     );
 
     let mut planner = FftPlanner::<f32>::new();

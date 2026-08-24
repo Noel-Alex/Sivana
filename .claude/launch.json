@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sivana-api",
+      "runtimeExecutable": "C:\\Users\\aliza\\.cargo\\bin\\cargo",
+      "runtimeArgs": ["run", "-p", "sivana-api", "--release", "--", "--catalog", "C:\\Users\\aliza\\AppData\\Local\\Temp\\sivana-catalog2", "--web", "apps/web"],
+      "port": 8077
+    }
+  ]
+}

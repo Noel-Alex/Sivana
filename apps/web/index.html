@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SIVANA — A Machine For Finding Sound</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="state-idle">
+  <canvas id="viz" aria-hidden="true"></canvas>
+
+  <header class="masthead">
+    <span class="brand">SIVANA</span>
+    <span class="issue">ENGINE A · LANDMARK · CATALOG <span id="catalog-version">—</span></span>
+    <nav class="mastnav">
+      <button class="navlink" id="toggle-archive">ARCHIVE</button>
+      <button class="navlink" id="toggle-notes">NOTES</button>
+    </nav>
+  </header>
+
+  <main class="stage">
+    <!-- IDLE -->
+    <section id="panel-hero" class="panel">
+      <p class="kicker">A MACHINE FOR FINDING SOUND</p>
+      <h1 class="headline">Hear&nbsp;it.<br /><em>Name&nbsp;it.</em></h1>
+      <button id="listen-btn" class="ring-btn" aria-label="Start listening">
+        <span class="ring-btn__dot"></span>LISTEN
+      </button>
+      <p class="sub">Recognition without uploading your raw audio.<br />Fingerprinted locally, in Rust.</p>
+    </section>
+
+    <!-- LISTENING -->
+    <section id="panel-listening" class="panel hidden" aria-live="polite">
+      <p class="kicker">WHAT ARE WE HEARING?</p>
+      <div class="bigread"><span id="fact-captured">0.00</span><small>s</small></div>
+      <button id="stop-btn" class="ghost-btn">■ STOP</button>
+    </section>
+
+    <!-- MATCHED -->
+    <section id="panel-result" class="panel hidden" aria-live="polite">
+      <p class="folio">FOUND</p>
+      <h2 class="result-title" id="result-title">—</h2>
+      <p class="result-artist" id="result-artist">—</p>
+      <dl class="result-meta">
+        <div><dt>MATCHED AT</dt><dd id="result-offset">—</dd></div>
+        <div><dt>EVIDENCE</dt><dd id="result-confidence">—</dd></div>
+        <div><dt>RECOGNIZED IN</dt><dd id="result-latency">—</dd></div>
+      </dl>
+      <button id="again-btn" class="ghost-btn">LISTEN AGAIN</button>
+    </section>
+
+    <!-- NO MATCH -->
+    <section id="panel-nomatch" class="panel hidden" aria-live="polite">
+      <p class="folio">NOT FOUND</p>
+      <h2 class="headline headline--small">Not in the catalog — yet.</h2>
+      <button id="retry-btn" class="ghost-btn">TRY AGAIN</button>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span>SIGNAL <b id="fact-signal">—</b></span>
+    <span>LANDMARKS <b id="fact-landmarks">0</b></span>
+    <span>STATUS <b id="fact-status">IDLE</b></span>
+    <span class="statusbar__right">SIVANA / LOCAL FINGERPRINTS ONLY</span>
+  </footer>
+
+  <!-- Slide-over: archive -->
+  <aside id="drawer-archive" class="drawer" aria-label="Recognition archive">
+    <h3 class="drawer__title">ARCHIVE</h3>
+    <ol id="archive-list" class="archive-list"></ol>
+  </aside>
+
+  <!-- Slide-over: diagnostics -->
+  <aside id="drawer-notes" class="drawer" aria-label="System notes">
+    <h3 class="drawer__title">SYSTEM NOTES</h3>
+    <pre id="colo-body" class="notes-body"></pre>
+  </aside>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+[package]
+name = "sivana-landmark"
+version = "0.1.0"
+edition = "2024"
+description = "Sivana Landmark Engine V2: scored target zones and 32-bit pair fingerprints."
+
+[dependencies]
+sivana-core = { path = "../sivana-core" }
+sivana-dsp = { path = "../sivana-dsp" }

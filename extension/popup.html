@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  body { margin:0; width:340px; background:#FAF7F2; color:#141210;
+         font-family:Inter,"Helvetica Neue",Arial,sans-serif; }
+  .mast { display:flex; justify-content:space-between; padding:14px 16px 10px;
+          border-bottom:2px solid #141210; }
+  .brand { font-family:"Didot",Georgia,serif; font-size:22px; letter-spacing:.08em; }
+  .issue { font-size:8px; color:#6E675E; letter-spacing:.18em; text-transform:uppercase; align-self:end; }
+  main { padding:20px 16px 16px; text-align:center; }
+  .kicker { font-size:9px; color:#D64518; letter-spacing:.22em; text-transform:uppercase; margin:0 0 10px; }
+  #listen { border:2px solid #141210; background:none; padding:12px 28px; font-size:11px;
+            letter-spacing:.3em; cursor:pointer; width:100%; }
+  #listen:hover { background:#141210; color:#FAF7F2; }
+  #status { font-size:9px; color:#6E675E; letter-spacing:.2em; text-transform:uppercase; min-height:14px; margin-top:14px; }
+  #result { display:none; border-top:2px solid #141210; padding-top:12px; margin-top:12px; text-align:left; }
+  .folio { font-size:8px; color:#D64518; letter-spacing:.22em; text-transform:uppercase; }
+  .title { font-family:"Didot",Georgia,serif; font-size:19px; line-height:1.1; margin:6px 0 2px; overflow-wrap:anywhere; }
+  .artist { font-size:12px; margin:0 0 10px; }
+  .meta { display:flex; justify-content:space-between; font-size:10px; color:#6E675E; }
+  footer { border-top:1px solid rgba(20,18,16,.25); padding:10px 16px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  input#server { flex:1; min-width:0; font-size:10px; border:none; background:none;
+                 border-bottom:1px solid rgba(20,18,16,.4); }
+</style>
+</head>
+<body>
+  <div class="mast">
+    <span class="brand">SIVANA</span><span class="issue">TAB EDITION</span>
+  </div>
+  <main>
+    <p class="kicker">WHAT IS THIS TAB PLAYING?</p>
+    <button id="listen">LISTEN</button>
+    <div id="status"></div>
+    <div id="result">
+      <div class="folio">FOUND</div>
+      <div class="title" id="r-title"></div>
+      <div class="artist" id="r-artist"></div>
+      <div class="meta"><span id="r-offset"></span><span id="r-latency"></span></div>
+    </div>
+  </main>
+  <footer>
+    <label for="server">SERVER</label><input id="server" value="ws://127.0.0.1:8077" />
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

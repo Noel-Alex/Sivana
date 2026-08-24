@@ -1,0 +1,14 @@
+[package]
+name = "sivana-invariant"
+version = "0.1.0"
+edition = "2024"
+
+# Engine B1: scale-invariant event-triplet fingerprints (PLAN §28, §85).
+
+[dependencies]
+sivana-core = { path = "../sivana-core" }
+sivana-dsp = { path = "../sivana-dsp" }
+sivana-match = { path = "../sivana-match" }
+
+[dev-dependencies]
+sivana-audio = { path = "../sivana-audio" }
