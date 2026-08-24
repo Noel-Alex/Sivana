@@ -46,6 +46,23 @@ cargo run -p sivana-api  --release -- --catalog /tmp/catalog --web apps/web
 The browser fingerprints locally (wasm); only compact fingerprint batches
 cross the network. Raw audio never leaves the page.
 
+### API hardening flags
+
+`POST /v1/recordings` (catalog ingestion) accepts an optional shared secret:
+
+```bash
+cargo run -p sivana-api --release -- --ingest-token "pick-a-long-secret"
+# then authenticate with either:
+curl -X POST http://127.0.0.1:8077/v1/recordings \
+  -H "Authorization: Bearer pick-a-long-secret" -F source_url=... -F audio=@track.flac
+# or, from the browser form (multipart), add a `token` field with the same secret.
+```
+
+Without `--ingest-token` ingestion is open (fine for localhost) and the server
+prints `ingest endpoint open (no --ingest-token set)` at startup. Session
+creation is additionally bounded per client IP to 30 sessions/minute, and the
+server serves at most 32 concurrent recognition sessions at a time.
+
 ## Workspace
 
 `legacy/` is the frozen first prototype kept as the benchmark control.
