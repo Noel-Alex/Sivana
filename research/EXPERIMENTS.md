@@ -198,3 +198,58 @@ speed/pitch/stretch axis
   in advance so a future implementation is judged against a pre-registered
   baseline.
 - **Artifacts:** research/NEURAL-EVAL.md.
+
+## E9. Engine B1 discriminativity levers on a 12-track catalog — Phase 7 closure
+
+- **Date:** 2026-08-25
+- **Question:** Do the E5-listed next levers (df-weighted triplet rarity,
+  per-band frequency pre-quantization) and a larger catalog separate true
+  from false evidence enough to promote Engine B1?
+- **Method:** `run_e9_b1_levers` (sivana-bench, `sivana-bench e9`): four
+  configurations over one shared 12-track x 20 s synthetic corpus —
+  E5 baseline, df-weighted candidate ranking (§14 idf on triplets,
+  `query_affine_weighted`), per-band pre-quantization
+  (`quant_band_power=2`, geometric band collapse before ratio hashing),
+  and both combined. Grid: clean + pink10 + speed0.90 + pitch+2st +
+  stretch1.10x, 2 positions/track = 120 in-catalog cases; 5 held-out
+  songs x 5 degradations = 25 rejection probes; gate = E5's inliers >= 210.
+- **Result:**
+
+  | variant | recall | FA @210 | max rejection inliers | median match inliers |
+  |---|---:|---:|---:|---:|
+  | e5-baseline | 32.5% | 14/25 | 404 | 279 |
+  | df-weighted | 31.7% | 11/25 | 404 | 291 |
+  | quantized | 34.2% | 19/25 | 467 | 304 |
+  | both levers | 33.3% | 18/25 | 467 | 314 |
+
+- **Findings:**
+  1. The failure is structural, not a tuning gap: wrong-audio evidence
+     (up to 467 affine-consistent pairs after stop-hash filtering)
+     *exceeds* genuine transformed-match evidence (median ~300). No gate
+     position can separate overlapping distributions.
+  2. Df-weighting trims false accepts only marginally (14 -> 11 of 25)
+     without touching the overlap; it cannot fix a hash space whose
+     effective entropy is too low for the catalog.
+  3. Per-band quantization makes rejection WORSE (FA 19/25, max 467):
+     collapsing frequencies to coarse bands raises cross-song hash
+     collisions — it densifies postings instead of sharpening identity.
+     This mirrors the E2 shared-timbre lesson.
+  4. Catalog size alone does not rescue it at 12 tracks; the ~20-bit
+     hash space saturates long before df statistics become meaningful.
+- **Decision: Phase 7 is CLOSED with B1 not promoted** (second and final
+  strike; §85 choose-by-measurement rule). The triplet ratio construction
+  achieves its invariance goal but cannot meet the zero-false-accept bar
+  on any tested catalog size or lever configuration. Consequences:
+  - B1 stays in-tree as an experimental fallback with documented limits;
+    `sivana-invariant` gains `query_affine_weighted` + `quant_band_power`
+    (kept behind config, defaults preserve E5 behaviour).
+  - Speed/pitch/stretch coverage remains an acknowledged gap owned by
+    Engine A + WSOLA-tolerance (stretch recall 100% in E5); playback-rate
+    queries fall back to NO_MATCH until either (a) a constant-Q triplet
+    design with >24-bit entropy is proven offline, or (b) neural trigger
+    T1-T3 fires (research/NEURAL-EVAL.md).
+  - Any future B2 quad work must first show, offline on synthetic data,
+    that its hash space exceeds ~28 bits AND wrong-audio evidence stays
+    below half of true-match evidence before implementation begins.
+- **Artifacts:** `sivana-bench e9 --tracks 12 --seconds 20` (deterministic,
+  reproducible via seed 2026).

@@ -31,6 +31,12 @@ pub struct TripletsConfig {
     pub freq_ratio_bits: u32,
     /// Time-ratio quantization steps spanning [0, 1].
     pub time_ratio_steps: u32,
+    /// E9 lever: quantize each event's frequency to `2^quant_band_power`
+    /// wide geometric bands before taking ratios. Kills low-bin rounding
+    /// sensitivity (a ratio of bins 3 vs 7 jitters wildly under frequency
+    /// scaling; a ratio of band indices barely moves). 0 = off (E5
+    /// behaviour).
+    pub quant_band_power: u32,
 }
 
 impl Default for TripletsConfig {
@@ -44,6 +50,8 @@ impl Default for TripletsConfig {
             // Coarse on purpose: frame-integer rounding under time scaling
             // jitters gap ratios by ~10%; 32 steps absorbs that.
             time_ratio_steps: 16,
+            // E5 default preserved until the E9 lever is measured.
+            quant_band_power: 0,
         }
     }
 }
@@ -98,6 +106,17 @@ pub fn fingerprint_triplets(peaks: &[Peak], cfg: &TripletsConfig) -> Vec<Triplet
             continue;
         }
         let take = cands.len().min(cfg.fanout);
+        // E9 lever: geometric pre-quantization. Each event collapses to its
+        // power-of-two band before ratios are taken, so a ±half-bin
+        // frequency jitter under scaling can no longer swing the ratio of
+        // small bins.
+        let band_of = |bin: usize| -> f64 {
+            if cfg.quant_band_power == 0 {
+                bin as f64 + 0.5
+            } else {
+                ((bin >> cfg.quant_band_power) as f64 + 0.5).max(0.5)
+            }
+        };
         for j in 0..take - 1 {
             for k in j + 1..take {
                 let b = cands[j];
@@ -105,9 +124,9 @@ pub fn fingerprint_triplets(peaks: &[Peak], cfg: &TripletsConfig) -> Vec<Triplet
                 if c.time_idx == b.time_idx || b.time_idx == a.time_idx {
                     continue;
                 }
-                let f1 = (a.freq_bin_idx as f64 + 0.5).max(0.5);
-                let f2 = (b.freq_bin_idx as f64 + 0.5).max(0.5);
-                let f3 = (c.freq_bin_idx as f64 + 0.5).max(0.5);
+                let f1 = band_of(a.freq_bin_idx);
+                let f2 = band_of(b.freq_bin_idx);
+                let f3 = band_of(c.freq_bin_idx);
                 let q1 = q_ratio((f2 / f1).log2(), fr_bits);
                 let q2 = q_ratio((f3 / f1).log2(), fr_bits);
                 let tr = q_tratio(
@@ -149,26 +168,34 @@ pub struct B1Outcome {
     pub residual: f32,
 }
 
-/// Query an [`sivana_match::InMemoryIndex`] populated with triplet hashes.
-///
-/// Candidates are ranked by raw vote count, then verified per candidate by
-/// robust least-squares over `(t_q -> t_db)` pairs (two outlier-trimming
-/// passes).
 /// One aligned (query, catalog) triplet pair feeding the affine fit.
 #[derive(Clone, Copy)]
 struct Pair {
     rec: u32,
     t_db: u32,
     t_q: u32,
+    /// Rarity of the contributing hash (idf mass), used for candidate
+    /// ranking instead of raw counts when `df_weighting` is on.
+    weight: f64,
 }
 
-pub fn query_affine(
+/// Query an [`sivana_match::InMemoryIndex`] populated with triplet hashes.
+///
+/// Candidates are ranked by vote mass, then verified per candidate by
+/// robust least-squares over `(t_q -> t_db)` pairs (outlier-trimming
+/// passes). With `df_weighted = false` the mass is the raw pair count
+/// (E5 behaviour); with `true` each pair carries the §14 rarity weight of
+/// its hash, so ubiquitous timbre triplets can no longer manufacture
+/// hundreds of "affine-consistent" pairs for out-of-catalog audio.
+pub fn query_affine_weighted(
     index: &sivana_match::InMemoryIndex,
     query: &[TripletFp],
     max_candidates: usize,
+    df_weighted: bool,
 ) -> Vec<B1Outcome> {
     // Stop-hash suppression (§15): a triplet present in every recording
     // carries zero identity information — usually shared timbre structure.
+    let n_recs_f = index.n_recordings().max(1) as f64;
     let n_recs = index.n_recordings().max(1) as usize;
     let mut pairs: Vec<Pair> = Vec::new();
     for q in query {
@@ -182,11 +209,13 @@ pub fn query_affine(
             if distinct >= n_recs && n_recs > 1 {
                 continue;
             }
+            let weight = ((n_recs_f + 1.0) / (distinct as f64 + 1.0)).ln().max(1e-3);
             for p in plist {
                 pairs.push(Pair {
                     rec: p.recording.as_u32(),
                     t_db: p.anchor_time,
                     t_q: q.t1,
+                    weight: if df_weighted { weight } else { 1.0 },
                 });
             }
         }
@@ -196,7 +225,7 @@ pub fn query_affine(
     }
 
     pairs.sort_by_key(|p| (p.rec, p.t_db));
-    // Group runs per recording.
+    // Group runs per recording; rank candidates by summed pair mass.
     let mut by_rec: Vec<(u32, Vec<Pair>)> = Vec::new();
     for p in pairs {
         match by_rec.last_mut() {
@@ -204,13 +233,28 @@ pub fn query_affine(
             _ => by_rec.push((p.rec, vec![p])),
         }
     }
-    by_rec.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+    by_rec.sort_by(|a, b| {
+        let sa: f64 = b.1.iter().map(|p| p.weight).sum();
+        let sb: f64 = a.1.iter().map(|p| p.weight).sum();
+        sa.partial_cmp(&sb)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     by_rec
         .into_iter()
         .take(max_candidates)
         .filter_map(|(_rec, plist)| fit_affine(&plist))
         .collect()
+}
+
+/// E5-compatible entry point: raw-count ranking, no rarity weighting.
+pub fn query_affine(
+    index: &sivana_match::InMemoryIndex,
+    query: &[TripletFp],
+    max_candidates: usize,
+) -> Vec<B1Outcome> {
+    query_affine_weighted(index, query, max_candidates, false)
 }
 
 /// Robust affine fit `t_db = a * t_q + b`; returns None when too few pairs.

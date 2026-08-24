@@ -18,7 +18,7 @@ deferred — by recorded decision, not omission:
 | 4 wasm engine | same core compiled to wasm32, SFP1 wire format | `sivana-wasm` | done; WASM SIMD not attempted |
 | 5 production website | Axum API + streaming recognition + editorial UI | `sivana-api`, `apps/web` | done |
 | 6 catalog platform | parallel idempotent ingest, delta segments, compaction | `sivana-ingest` | done |
-| 7 scale-invariant engine | B1 triplets + affine verification; measured, **not promoted** (E5) | `sivana-invariant` | partial: B1 built + benchmarked; B2 quads not implemented; Engine A stays primary |
+| 7 scale-invariant engine | B1 triplets + affine verification; measured, **not promoted** (E5), levers exhausted and phase **closed** (E9) | `sivana-invariant` | closed by evidence: wrong-audio evidence exceeds true-match evidence on every tested configuration; speed/pitch coverage is a documented gap (see E9) |
 | 8 neural evaluation | evaluation-only; deferred with re-entry triggers T1–T3 | [research/NEURAL-EVAL.md](research/NEURAL-EVAL.md) | deferred by design (E6) |
 | 9 chrome extension | MV3 tabCapture → offscreen, reuses the same engine | `extension/` | functional gaps being closed |
 | 10 scale-out | hot catalog swap, load generator, deployment guide | `docs/DEPLOY.md` | done for single-region |
