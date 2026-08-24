@@ -837,11 +837,11 @@ pub fn run_e9_b1_levers(
                     let qfps = fingerprint_triplets(&qpeaks, &tcfg);
                     let outcomes = query_affine_weighted(&index, &qfps, 3, df_weighted);
                     total += 1;
-                    if let Some(best) = outcomes.first() {
-                        if best.recording == track.recording {
-                            hits += 1;
-                            match_inliers.push(best.inliers);
-                        }
+                    if let Some(best) = outcomes.first()
+                        && best.recording == track.recording
+                    {
+                        hits += 1;
+                        match_inliers.push(best.inliers);
                     }
                 }
             }
