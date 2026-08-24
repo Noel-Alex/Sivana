@@ -46,6 +46,12 @@ pub struct CaseResult {
     pub score_weight: Option<f32>,
     pub offset_concentration: Option<f32>,
     pub margin_over_next: Option<f32>,
+    // Robustness-contract verifier features (unique aligned occurrences,
+    // matched query-time span, mean inlier rarity). Recorded for every
+    // case so the calibration sweep can weigh them.
+    pub unique_aligned: Option<usize>,
+    pub query_span_frames: Option<u32>,
+    pub mean_rarity: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +62,10 @@ pub struct RejectionCase {
     pub best_inliers: Option<usize>,
     pub best_concentration: Option<f32>,
     pub best_margin: Option<f32>,
+    // Verifier features on the strongest (wrong) candidate.
+    pub best_unique_aligned: Option<usize>,
+    pub best_query_span_frames: Option<u32>,
+    pub best_mean_rarity: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -284,6 +294,9 @@ pub fn run_baseline(
                     score_weight: None,
                     offset_concentration: None,
                     margin_over_next: None,
+                    unique_aligned: None,
+                    query_span_frames: None,
+                    mean_rarity: None,
                 });
                 case_id += 1;
             }
@@ -310,6 +323,9 @@ pub fn run_baseline(
             best_inliers: None,
             best_concentration: None,
             best_margin: None,
+            best_unique_aligned: None,
+            best_query_span_frames: None,
+            best_mean_rarity: None,
         });
     }
 
@@ -485,6 +501,9 @@ pub fn run_landmark_v2(
                     score_weight: best.map(|o| o.weighted_score),
                     offset_concentration: best.map(|o| o.offset_concentration),
                     margin_over_next: best.map(|o| o.margin_over_next),
+                    unique_aligned: best.map(|o| o.unique_aligned),
+                    query_span_frames: best.map(|o| o.query_span_frames),
+                    mean_rarity: best.map(|o| o.mean_rarity),
                 });
                 case_id += 1;
             }
@@ -517,6 +536,9 @@ pub fn run_landmark_v2(
             best_inliers: outcomes.first().map(|o| o.inliers),
             best_concentration: outcomes.first().map(|o| o.offset_concentration),
             best_margin: outcomes.first().map(|o| o.margin_over_next),
+            best_unique_aligned: outcomes.first().map(|o| o.unique_aligned),
+            best_query_span_frames: outcomes.first().map(|o| o.query_span_frames),
+            best_mean_rarity: outcomes.first().map(|o| o.mean_rarity),
         });
     }
 
@@ -661,6 +683,9 @@ pub fn run_invariant_b1(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary
                     score_weight: best.map(|o| o.pairs as f32),
                     offset_concentration: best.map(|o| o.time_scale),
                     margin_over_next: best.map(|o| o.residual),
+                    unique_aligned: None,
+                    query_span_frames: None,
+                    mean_rarity: None,
                 });
                 case_id += 1;
             }
@@ -684,6 +709,9 @@ pub fn run_invariant_b1(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary
             best_inliers: outcomes.first().map(|o| o.inliers),
             best_concentration: outcomes.first().map(|o| o.time_scale),
             best_margin: outcomes.first().map(|o| o.residual),
+            best_unique_aligned: None,
+            best_query_span_frames: None,
+            best_mean_rarity: None,
         });
     }
 
