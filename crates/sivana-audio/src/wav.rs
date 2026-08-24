@@ -155,7 +155,9 @@ pub fn read_wav(path: &Path) -> Result<WavData, WavError> {
         }),
         2 => {
             let mono: Vec<f32> = samples_i
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| (c[0] + c[1]) / 2.0)
                 .collect();
             Ok(WavData {
@@ -168,13 +170,17 @@ pub fn read_wav(path: &Path) -> Result<WavData, WavError> {
 }
 
 fn decode_pcm16(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(2)
+    data.as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
         .collect()
 }
 
 fn decode_f32(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(4)
+    data.as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }

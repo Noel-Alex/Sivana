@@ -114,7 +114,7 @@ pub fn synth_song(seed: u64, duration_s: f32, sample_rate: u32) -> Vec<f32> {
     let mut bt = 0.0;
     let mut beat_i = 0usize;
     while bt < duration_s {
-        if beat_i % 2 == 0 && rng.next_f32() < 0.9 {
+        if beat_i.is_multiple_of(2) && rng.next_f32() < 0.9 {
             let start = (bt * sr) as usize;
             let burst_len = (0.06 * sr) as usize;
             for (k, slot) in out[start.min(total)..]
