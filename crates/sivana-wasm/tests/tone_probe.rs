@@ -52,7 +52,7 @@ fn engine_runs_at_operating_bands() {
     // Measure only anchors in [8 s, 14 s] = frames [169, 237].
     let late: Vec<_> = fps
         .iter()
-        .filter(|&&(f1, t)| t >= 169 && t <= 237 && f1 >= 320 && f1 <= 350)
+        .filter(|&&(f1, t)| (169..=237).contains(&t) && (320..=350).contains(&f1))
         .copied()
         .collect();
     assert!(

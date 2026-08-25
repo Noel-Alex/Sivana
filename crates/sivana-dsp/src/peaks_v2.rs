@@ -297,8 +297,7 @@ impl PeakStreamer {
             // the floor so sustained tones survive. Computed lazily for
             // this bin only — the local-max prefilter already cut ~98% of
             // cells, so this costs a few dozen window scans per frame.
-            if self.db_history.is_some() {
-                let hist = self.db_history.as_ref().expect("whitened history");
+            if let Some(hist) = &self.db_history {
                 let mut bg = f32::INFINITY;
                 for row in hist.iter() {
                     let v = row[b];
