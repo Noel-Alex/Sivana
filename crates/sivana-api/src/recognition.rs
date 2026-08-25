@@ -30,42 +30,33 @@ pub const GATE_MIN_INLIERS: usize = 7;
 /// the entire measured false band; the price is the one 2.75 true case
 /// (a rare miss beats a confident wrong answer).
 pub const GATE_MIN_MARGIN: f32 = 3.0;
-/// Solo-catalog acceptance (n_recordings == 1): no runner-up exists, so
-/// margin cannot separate truth from lucky collisions. Three features
-/// carry the gate, each calibrated from live measurement
-/// (E10/E11/E11b/E11c):
-///
-/// * DENSITY (inliers / (query_span_frames + 1)) separates scattered
-///   coincidence (<=1.36) from concentrated alignment; 2.0 sits below
-///   every true case's sustained window and above every scatter case.
-///   Phone-speaker EQ loss halves the arrival rate but keeps density
-///   windows at ~1.95-2.5 during capture.
-/// * CONFIRMATION closes the one remaining hole: same-franchise
-///   melodic QUOTATIONS (lost-girl quoting MEGALOVANIA) deliver a
-///   genuine burst of consistent evidence (33 distinct pair-hashes,
-///   conc 1.0, density 2.06) and then STOP when the quoted phrase ends.
-///   Density alone cannot separate burst-then-stall from continuous
-///   arrival, but growth CAN: a solo match is only confirmed when the
-///   inlier count has grown by GATE_SOLO_CONFIRM_GROWTH after
-///   GATE_SOLO_CONFIRM_SECONDS beyond the moment the candidate first
-///   cleared the floors. Real playback keeps feeding new alignment for
-///   as long as the mic hears it; a quotation runs dry.
-pub const GATE_SOLO_MIN_INLIERS: usize = 30;
-pub const GATE_SOLO_MIN_CONCENTRATION: f32 = 0.8;
-pub const GATE_SOLO_MIN_DENSITY: f32 = 2.0;
-pub const GATE_SOLO_CONFIRM_SECONDS: f32 = 2.0;
-pub const GATE_SOLO_CONFIRM_GROWTH: usize = 8;
-/// Absolute mass required AT CONFIRMATION TIME. Same-franchise
-/// quotations keep re-triggering their quoted phrase (lost-girl
-/// reprises MEGALOVANIA), so growth-based confirmation alone cannot
-/// separate them from real playback: a sliding trailing window
-/// eventually sits entirely inside a reprise and reads conc 1.0 with
-/// growing inliers. Measured ceilings/floors (E11c): quotation junk
-/// never exceeds ~110 sustained aligned hashes (the phrase's total
-/// fingerprint inventory), while EVERY true case — including
-/// phone-speaker-degraded ones — banks >=264 within the capture
-/// window. 150 sits between the bands.
-pub const GATE_SOLO_CONFIRM_MIN_INLIERS: usize = 150;
+/// Solo-catalog acceptance (n_recordings == 1), E13: no runner-up exists,
+/// so margin cannot separate truth from collisions; the job belongs to
+/// the fingerprinter's temporal background suppression (E12), which
+/// removed stationary phantom evidence at the SOURCE. Post-E12 measured
+/// bands (live WS, realtime pacing, re-ingested catalog): negatives and
+/// pure room tone peak <=10 aligned inliers; every true case >=143 even
+/// under heavy degradation. The floor sits between the bands with ~6x
+/// headroom over junk and ~2x under the weakest true case. The E11c
+/// arm/confirm machinery is retired: growth was a ceiling-trap for
+/// slow-ramp evidence and density punished capture length (E11b).
+pub const GATE_SOLO_MIN_INLIERS_E13: usize = 64;
+/// E13 tight-spike prong: a spike only counts once it carries real mass —
+/// concentration is measured inside the winning ±2-frame bucket, so any
+/// lone stray hash trivially reads conc 1.0 with span 0. True playback
+/// shows >=44 aligned inliers within span 9 of first appearance; junk
+/// cells hold single digits.
+pub const GATE_SPIKE_MIN_INLIERS: usize = 20;
+/// E13 tight-spike prong: while the inlier window is still this young,
+/// concentration at or above the threshold identifies true alignment.
+pub const GATE_SPIKE_MAX_SPAN_FRAMES: u32 = 16;
+/// E13 tight-spike prong: fraction of the candidate's vote mass inside
+/// the winning ±2-frame bucket. Measured bands: true playback reads
+/// 0.98-1.00 (the ±2-frame tolerance absorbs jitter); every false source
+/// of alignment — lost-girl quotation 0.88 max, spider-dance shared-patch
+/// collision 0.904 max — smears across buckets. 0.95 centers the floor in
+/// the measured (0.904, 0.98) gap.
+pub const GATE_SPIKE_MIN_CONCENTRATION: f32 = 0.95;
 pub const GATE_MIN_CONCENTRATION: f32 = 0.5;
 /// Robustness-contract verifier floor: at least this many DISTINCT query
 /// hashes must align with the winning candidate. A single hash repeating
@@ -107,12 +98,6 @@ pub struct RecognitionSession {
     /// Latest audio anchor included in a full matcher evaluation.
     last_evaluated_anchor: Option<u32>,
     min_query_stride_frames: u32,
-    /// Solo-catalog confirmation state (E11c): the winning recording when
-    /// armed, the capture-time instant it first cleared the solo floors,
-    /// and its inlier count at that moment. A confident match requires
-    /// evidence to still be growing after `GATE_SOLO_CONFIRM_SECONDS`,
-    /// which burst-then-stall quotation collisions never achieve.
-    solo_armed_at: Option<(sivana_core::RecordingId, f32, usize)>,
     #[cfg(test)]
     evaluations: usize,
 }
@@ -132,7 +117,6 @@ impl RecognitionSession {
             max_window_frames: (fps_rate * 10.0) as u32,
             last_evaluated_anchor: None,
             min_query_stride_frames: (fps_rate * QUERY_CADENCE_SECONDS).ceil() as u32,
-            solo_armed_at: None,
             #[cfg(test)]
             evaluations: 0,
         }
@@ -209,36 +193,30 @@ impl RecognitionSession {
             // evidence density: true audio alignment concentrates inliers in
             // adjacent frames, junk spreads them across the window (E11).
             let solo = index.n_recordings() < 2;
-            let density = (top.inliers as f32) / (top.query_span_frames as f32 + 1.0);
             let accepted = if solo {
-                // The floors decide when to ARM, not whether every single
-                // evaluation passes: cumulative density decays as the query
-                // window widens even for perfect playback (E11b), so
-                // re-checking them each round would disarm real matches.
-                // Once armed, confirmation alone gates acceptance — and it
-                // is keyed to the winning recording, resetting if the
-                // leader changes.
-                if self
-                    .solo_armed_at
-                    .is_some_and(|(rec, _, _)| rec != top.recording)
-                {
-                    self.solo_armed_at = None;
-                }
-                let floors_clear = top.inliers >= GATE_SOLO_MIN_INLIERS
-                    && top.offset_concentration >= GATE_SOLO_MIN_CONCENTRATION
-                    && density >= GATE_SOLO_MIN_DENSITY
-                    && top.unique_aligned >= GATE_MIN_UNIQUE_ALIGNED;
-                if floors_clear && self.solo_armed_at.is_none() {
-                    self.solo_armed_at = Some((top.recording, self.capture_seconds(), top.inliers));
-                }
-                match self.solo_armed_at {
-                    Some((_, armed_at, armed_inliers)) => {
-                        self.capture_seconds() - armed_at >= GATE_SOLO_CONFIRM_SECONDS
-                            && top.inliers >= armed_inliers + GATE_SOLO_CONFIRM_GROWTH
-                            && top.inliers >= GATE_SOLO_CONFIRM_MIN_INLIERS
-                    }
-                    None => false,
-                }
+                // E13 gate, two independent prongs measured on the E12
+                // (minimum-statistics whitening) engine:
+                //
+                // * ALIGNMENT TIGHTNESS is the solo-catalog discriminator.
+                //   True playback reproduces the catalog's exact sample
+                //   timing, so nearly ALL votes land inside one ±2-frame
+                //   offset bucket: megalovania reads conc 0.98-1.00 from
+                //   the first evaluation. Every measured false source of
+                //   aligned evidence — lost-girl reprising the motif,
+                //   spider-dance sharing synth patches — smears across
+                //   buckets (tempo/performance drift) and NEVER exceeds
+                //   0.88. Both prongs therefore demand conc >= 0.9.
+                // * SPIKE: small-but-immediate evidence (>=20 inliers while
+                //   the window is still young) confirms instantly — this is
+                //   the prong that makes playback match within ~0.5 s.
+                // * MASS: larger evidence (>=64 distinct pair-hashes)
+                //   confirms once enough of the song has streamed; junk
+                //   peaks ~10-27.
+                let tight = top.offset_concentration >= GATE_SPIKE_MIN_CONCENTRATION;
+                top.inliers >= GATE_SOLO_MIN_INLIERS_E13 && tight
+                    || (top.inliers >= GATE_SPIKE_MIN_INLIERS
+                        && top.query_span_frames <= GATE_SPIKE_MAX_SPAN_FRAMES
+                        && tight)
             } else {
                 top.inliers >= GATE_MIN_INLIERS
                     && top.offset_concentration >= GATE_MIN_CONCENTRATION
@@ -374,90 +352,70 @@ mod tests {
         );
         assert_eq!(session.outcome.as_ref().unwrap().margin_over_next, 1.0);
         // Weak evidence on a solo catalog stays a candidate: without a
-        // runner-up margin, acceptance leans on the density floor and this
-        // query carries too few inliers to clear it.
+        // runner-up margin, acceptance leans on the absolute mass floor
+        // and this query carries too few inliers to clear it.
         assert_eq!(state, RecognitionState::Candidate);
     }
 
     #[test]
     fn dense_solo_catalog_evidence_confidently_matches() {
-        // One recording whose hashes align with a dense query stream at a
-        // single constant offset. Real capture arrives in waves, and the
-        // E11c confirmation stage requires evidence to still be growing
-        // after GATE_SOLO_CONFIRM_SECONDS — so the test streams a first
-        // wave (40 hashes over 8 frames, density ~4.4), waits past the
-        // confirm window, then streams a second wave on the same offset.
+        // E13: a single absolute mass floor. Enough aligned evidence
+        // crossing the floor confirms immediately — no arming, no clock
+        // games, no growth requirement (which was a ceiling-trap for
+        // slow-ramp real-mic evidence).
         let mut idx = InMemoryIndex::new();
-        let mut catalog = Vec::new();
-        // Enough hash inventory to exceed GATE_SOLO_CONFIRM_MIN_INLIERS:
-        // 200 hashes over two timeline regions.
-        for i in 0..200u32 {
-            catalog.push((500 + i, 100 + (i / 5) * 2));
-        }
+        let catalog: Vec<(u32, u32)> = (0..200).map(|i| (500 + i, 100 + i)).collect();
         idx.add_recording(RecordingId::new(0), &catalog);
         idx.finalize();
         let mut session = RecognitionSession::new(22_050, 1024);
-        // Wave 1 at fixed offset 90; crosses the solo floors and arms the
-        // confirmation timer.
-        let wave1: Vec<QueryFp> = (0..60)
+        // Aligned at offset 90 with enough distinct hashes to exceed the
+        // E13 floor several times over.
+        let wave: Vec<QueryFp> = (0..150)
             .map(|i| QueryFp {
                 hash: 500 + i,
-                anchor_time: 10 + (i / 5) * 2,
+                anchor_time: 10 + i,
             })
             .collect();
-        let state1 = session.ingest(wave1, &idx, &MatchParams::default());
-        assert_ne!(state1, RecognitionState::ConfidentMatch);
-        // Advance the clock beyond the confirm window.
-        session.started_at -= std::time::Duration::from_secs_f32(GATE_SOLO_CONFIRM_SECONDS + 0.5);
-        // Wave 2 on the same alignment: mass grows past the confirm floor.
-        let wave2: Vec<QueryFp> = (60..200)
-            .map(|i| QueryFp {
-                hash: 500 + i,
-                anchor_time: 10 + (i / 5) * 2,
-            })
-            .collect();
-        let state2 = session.ingest(wave2, &idx, &MatchParams::default());
-        assert_eq!(state2, RecognitionState::ConfidentMatch);
+        let state = session.ingest(wave, &idx, &MatchParams::default());
+        assert_eq!(state, RecognitionState::ConfidentMatch);
         let o = session.outcome.as_ref().unwrap();
         assert_eq!(o.recording.as_u32(), 0);
     }
 
     #[test]
-    fn stalled_solo_evidence_does_not_confirm() {
-        // The quotation signature (E11c): a strong burst that clears every
-        // floor but never accumulates GATE_SOLO_CONFIRM_MIN_INLIERS of
-        // mass — the quoted phrase's hash inventory runs out.
+    fn sub_floor_solo_evidence_never_confirms() {
+        // The post-E12 junk band: stationary/room-tone evidence and weak
+        // collisions peak around ~10 aligned inliers — far below the floor.
+        // Mass alone must not confirm; the session stays a candidate until
+        // the capture timeout.
         let mut idx = InMemoryIndex::new();
-        let catalog: Vec<(u32, u32)> = (0..40).map(|i| (500 + i, 100 + i)).collect();
+        let catalog: Vec<(u32, u32)> = (0..80).map(|i| (500 + i, 100 + i)).collect();
         idx.add_recording(RecordingId::new(0), &catalog);
         idx.finalize();
         let mut session = RecognitionSession::new(22_050, 1024);
-        let burst: Vec<QueryFp> = (0..40)
+        let burst: Vec<QueryFp> = (0..10)
             .map(|i| QueryFp {
                 hash: 500 + i,
-                anchor_time: 10 + i / 3, // dense burst, density > 2
+                anchor_time: 10 + i,
             })
             .collect();
         let state1 = session.ingest(burst, &idx, &MatchParams::default());
-        assert_ne!(state1, RecognitionState::ConfidentMatch);
-        // Clock passes the confirm window; a reprise re-triggers growth on
-        // the same small inventory (inliers fluctuate around 40-100) but
-        // mass stays below the confirm floor.
-        session.started_at -= std::time::Duration::from_secs_f32(GATE_SOLO_CONFIRM_SECONDS + 1.0);
-        let reprise: Vec<QueryFp> = (0..30)
+        assert_eq!(state1, RecognitionState::Candidate);
+        // More of the same scattered evidence later never crosses 64.
+        let more: Vec<QueryFp> = (20..30)
             .map(|i| QueryFp {
                 hash: 500 + i,
-                anchor_time: 400 + i / 3,
+                anchor_time: 400 + i,
             })
             .collect();
-        let state2 = session.ingest(reprise, &idx, &MatchParams::default());
+        let state2 = session.ingest(more, &idx, &MatchParams::default());
         assert_ne!(state2, RecognitionState::ConfidentMatch);
     }
 
     #[test]
     fn sparse_solo_catalog_evidence_stays_a_candidate() {
-        // Same hash identity but spread thin across the window: density ~0.2,
-        // the signature of scattered coincidence rather than aligned audio.
+        // Same hash identity but spread thin across the window: scattered
+        // coincidence rather than aligned audio.
         let mut idx = InMemoryIndex::new();
         let catalog: Vec<(u32, u32)> = (0..40).map(|i| (500 + i as u32, 100 + i as u32)).collect();
         idx.add_recording(RecordingId::new(0), &catalog);

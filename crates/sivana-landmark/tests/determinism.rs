@@ -73,6 +73,16 @@ fn moderate_amplitude_scaling_preserves_most_hashes() {
 /// Silence prefix shifts anchor times but preserves internal hash structure
 /// (§56 property): the hashes present must be the same population, offset
 /// by the silence length.
+///
+/// E12 refinement: temporal background suppression makes the fingerprinter
+/// ADAPTIVE — the per-bin background tracker converges with tau ≈ 43
+/// frames, so the first ~2 s after a level transition legitimately differ
+/// between a cold-started stream and one preceded by silence. Translation
+/// invariance therefore holds only AWAY from adaptation boundaries — which
+/// is exactly where recognition operates (queries arrive mid-playback,
+/// catalogs ingest whole files). Fingerprints inside the convergence
+/// transient are excluded from the comparison; everything after it must
+/// still match.
 #[test]
 fn silence_prefix_shifts_anchor_times_preserving_hashes() {
     let song = fixtures::synth_song(99, 6.0, 22_050);
@@ -86,7 +96,13 @@ fn silence_prefix_shifts_anchor_times_preserving_hashes() {
 
     let hop = cfg.hop as u32;
     let expected_shift = (silence.len() as u32) / hop;
-    // Every shifted fingerprint's hash must exist in the unshifted stream
+    let win = cfg.peaks.background_min_window_frames;
+    assert!(win > 0, "E12 whitening must be active in ingest config");
+    // Adaptation transient: the floor needs a full window of music history
+    // before it reflects the signal rather than its seeding, plus detector
+    // lookahead. Skip that region.
+    let transient_frames = expected_shift + win as u32 + 4;
+    // Every surviving fingerprint's hash must exist in the unshifted stream
     // at (anchor_time - shift), within one frame of rounding tolerance.
     let base_map: std::collections::HashMap<u32, Vec<u32>> = {
         let mut m: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
@@ -95,7 +111,12 @@ fn silence_prefix_shifts_anchor_times_preserving_hashes() {
         }
         m
     };
-    let matched = shifted
+    let compared: Vec<_> = shifted
+        .iter()
+        .filter(|f| f.anchor_time >= transient_frames)
+        .collect();
+    assert!(!compared.is_empty(), "comparison region emptied");
+    let matched = compared
         .iter()
         .filter(|f| {
             base_map
@@ -108,11 +129,12 @@ fn silence_prefix_shifts_anchor_times_preserving_hashes() {
                 .unwrap_or(false)
         })
         .count();
-    let ratio = matched as f64 / shifted.len() as f64;
+    let ratio = matched as f64 / compared.len() as f64;
     assert!(
         ratio >= 0.85,
-        "silence prefix changed hash population: {matched}/{} ({ratio:.2})",
-        shifted.len()
+        "silence prefix changed hash population outside the transient: \
+         {matched}/{} ({ratio:.2})",
+        compared.len()
     );
 }
 

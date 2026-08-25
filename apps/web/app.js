@@ -222,6 +222,21 @@ async function startListening() {
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
   state.ctx = new AudioContext({ sampleRate: FINGERPRINT_SAMPLE_RATE });
+  // Post-await context creation can land outside a user-gesture task
+  // (slow permission prompts); Safari/iOS and strict autoplay profiles then
+  // leave it suspended and the graph produces nothing while the UI says
+  // "listening". Resume explicitly and surface a persistent suspended state.
+  if (state.ctx.state !== "running") {
+    await state.ctx.resume();
+  }
+  state.ctx.onstatechange = () => {
+    if (state.ctx && state.ctx.state === "suspended" && !state.done) {
+      note("audio context suspended - click the page and try again");
+    }
+  };
+  if (state.ctx.state !== "running") {
+    throw new Error("audio context would not start (state: " + state.ctx.state + ")");
+  }
   state.resampler = new StreamingLinearResampler(
     state.ctx.sampleRate,
     FINGERPRINT_SAMPLE_RATE,
