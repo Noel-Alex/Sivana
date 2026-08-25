@@ -218,7 +218,10 @@ impl RecognitionSession {
                 // Once armed, confirmation alone gates acceptance — and it
                 // is keyed to the winning recording, resetting if the
                 // leader changes.
-                if self.solo_armed_at.is_some_and(|(rec, _, _)| rec != top.recording) {
+                if self
+                    .solo_armed_at
+                    .is_some_and(|(rec, _, _)| rec != top.recording)
+                {
                     self.solo_armed_at = None;
                 }
                 let floors_clear = top.inliers >= GATE_SOLO_MIN_INLIERS
@@ -226,8 +229,7 @@ impl RecognitionSession {
                     && density >= GATE_SOLO_MIN_DENSITY
                     && top.unique_aligned >= GATE_MIN_UNIQUE_ALIGNED;
                 if floors_clear && self.solo_armed_at.is_none() {
-                    self.solo_armed_at =
-                        Some((top.recording, self.capture_seconds(), top.inliers));
+                    self.solo_armed_at = Some((top.recording, self.capture_seconds(), top.inliers));
                 }
                 match self.solo_armed_at {
                     Some((_, armed_at, armed_inliers)) => {
@@ -406,9 +408,7 @@ mod tests {
         let state1 = session.ingest(wave1, &idx, &MatchParams::default());
         assert_ne!(state1, RecognitionState::ConfidentMatch);
         // Advance the clock beyond the confirm window.
-        session.started_at -= std::time::Duration::from_secs_f32(
-            GATE_SOLO_CONFIRM_SECONDS + 0.5,
-        );
+        session.started_at -= std::time::Duration::from_secs_f32(GATE_SOLO_CONFIRM_SECONDS + 0.5);
         // Wave 2 on the same alignment: mass grows past the confirm floor.
         let wave2: Vec<QueryFp> = (60..200)
             .map(|i| QueryFp {
@@ -443,9 +443,7 @@ mod tests {
         // Clock passes the confirm window; a reprise re-triggers growth on
         // the same small inventory (inliers fluctuate around 40-100) but
         // mass stays below the confirm floor.
-        session.started_at -= std::time::Duration::from_secs_f32(
-            GATE_SOLO_CONFIRM_SECONDS + 1.0,
-        );
+        session.started_at -= std::time::Duration::from_secs_f32(GATE_SOLO_CONFIRM_SECONDS + 1.0);
         let reprise: Vec<QueryFp> = (0..30)
             .map(|i| QueryFp {
                 hash: 500 + i,
