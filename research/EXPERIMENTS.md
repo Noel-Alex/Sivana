@@ -464,3 +464,42 @@ speed/pitch/stretch axis
   their aligned evidence after whitening is genuinely tiny. The browser
   pipeline itself was verified end-to-end healthy via headless Edge +
   fake-mic WAV replay (matched even harshest phone-proxy profiles).
+
+## E12b. Spectral dust: the failure minimum-statistics cannot see
+
+- **Date:** 2026-08-25
+- **Discovery:** after E12, a PURE steady sine still emitted thousands of
+  landmarks (8780 late anchors on a two-tone fixture). The leaks sit at
+  f1 485-511 — near-Nyquist FFT far-sidelobe / rounding bins whose
+  magnitudes wobble tens of dB frame-to-frame with DETERMINISTIC phase
+  advance. A wobble is indistinguishable from signal to any temporal
+  floor tracker: the min stays low, every wiggle reads as above-floor.
+- **Fix: relative ceiling floor** (`relative_floor_db = 35`): a candidate
+  must also sit within 35 dB of its frame's strongest bin.
+  Gain-invariant; measured margins are wide (real musical peaks well
+  inside, dust 60+ dB down). rel>=25 zeroes the two-tone leak.
+- **Perf:** eager per-frame floor computation O(window*bins) broke CI's
+  realtime-factor floor. The trailing-minimum is now computed LAZILY in
+  decide() for local-max candidate bins only (~20/frame) — identical
+  results, ~50x less work.
+- **Contract probes:** golden digest re-pinned (0xA449_337C); tone tests
+  rewritten for adaptivity: looping note sequences must keep emitting
+  with correct 512-band mapping late in the stream; steady tones must go
+  fully silent after the window settles. Shallow AM is NOT sufficient
+  non-stationarity (whole spectrum wobbles together and the floor tracks
+  it) — note onsets are the honest probe.
+
+## Environment record: this dev machine's audio stack
+
+- VoiceMeeter + SplitCam + Voice.ai virtual devices; ffplay playback
+  routes into VoiceMeeter and never reaches physical speakers (verify
+  captures with volumedetect BEFORE fingerprinting them).
+- Realtek mic array APO applies aggressive AGC that ducks sustained
+  music toward the noise floor mid-capture (-38.5 -> -57 dB RMS swings);
+  browser constraints cannot disable OS-layer processing (research:
+  Chromium tries AUDCLNT_STREAMOPTIONS_RAW with graceful fallback).
+- Physical speaker->mic captures remain below-floor rejections under the
+  final engine: correct, given their aligned evidence after whitening is
+  genuinely tiny (~5-13 inliers). The browser path itself was verified
+  end-to-end healthy via headless Edge + fake-device WAV replay of the
+  harshest phone-proxy profiles (all match).
