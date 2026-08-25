@@ -30,6 +30,19 @@ pub const GATE_MIN_INLIERS: usize = 7;
 /// the entire measured false band; the price is the one 2.75 true case
 /// (a rare miss beats a confident wrong answer).
 pub const GATE_MIN_MARGIN: f32 = 3.0;
+/// Solo-catalog acceptance (n_recordings == 1): no runner-up exists, so
+/// margin cannot separate truth from lucky collisions — but evidence
+/// DENSITY can. Measured on live audio (E10/E11 sweeps): genuine
+/// alignment piles up inside a few adjacent STFT frames (density =
+/// inliers / (query_span_frames + 1) >= 3.2 on every true case), while
+/// coincidence scatters across the whole trailing window (E10 cross-
+/// track false accepts <= 1.67; degenerate pink-noise-vs-fixture junk
+/// reached 155 inliers at conc 1.0 with density < 0.4). The floors sit
+/// between those bands; the continuous re-evaluation means a true query
+/// crosses them within a second or two of capture.
+pub const GATE_SOLO_MIN_INLIERS: usize = 30;
+pub const GATE_SOLO_MIN_CONCENTRATION: f32 = 0.8;
+pub const GATE_SOLO_MIN_DENSITY: f32 = 2.5;
 pub const GATE_MIN_CONCENTRATION: f32 = 0.5;
 /// Robustness-contract verifier floor: at least this many DISTINCT query
 /// hashes must align with the winning candidate. A single hash repeating
@@ -156,18 +169,29 @@ impl RecognitionSession {
         let outcomes = index.query(&self.fps, params);
         self.outcome = outcomes.first().cloned();
         if let Some(top) = outcomes.first() {
-            // Margin is the only feature that separates truth from lucky
-            // collisions (measured: pink noise against a single-track catalog
-            // reaches 155 inliers at conc 1.0 — no absolute floor survives).
-            // A one-recording catalog has no runner-up, so there is nothing
-            // to be confident ABOUT yet: matches are withheld entirely until
-            // a second recording provides the comparison.
-            let margin_passes =
-                index.n_recordings() >= 2 && top.margin_over_next >= GATE_MIN_MARGIN;
-            if top.inliers >= GATE_MIN_INLIERS
-                && top.offset_concentration >= GATE_MIN_CONCENTRATION
-                && top.unique_aligned >= GATE_MIN_UNIQUE_ALIGNED
-                && margin_passes
+            // Multi-recording catalogs: margin is the feature that separates
+            // truth from lucky collisions (measured: pink noise against a
+            // single-track catalog reaches 155 inliers at conc 1.0 — no
+            // absolute floor survives; E10: cross-track false accepts sit at
+            // margin 2.52-2.80, true matches above 3.0).
+            //
+            // Solo catalogs have no runner-up, so the same job falls to
+            // evidence density: true audio alignment concentrates inliers in
+            // adjacent frames, junk spreads them across the window (E11).
+            let solo = index.n_recordings() < 2;
+            let density = (top.inliers as f32) / (top.query_span_frames as f32 + 1.0);
+            let accepted = if solo {
+                top.inliers >= GATE_SOLO_MIN_INLIERS
+                    && top.offset_concentration >= GATE_SOLO_MIN_CONCENTRATION
+                    && density >= GATE_SOLO_MIN_DENSITY
+                    && top.unique_aligned >= GATE_MIN_UNIQUE_ALIGNED
+            } else {
+                top.inliers >= GATE_MIN_INLIERS
+                    && top.offset_concentration >= GATE_MIN_CONCENTRATION
+                    && top.unique_aligned >= GATE_MIN_UNIQUE_ALIGNED
+                    && top.margin_over_next >= GATE_MIN_MARGIN
+            };
+            if accepted
             {
                 self.state = RecognitionState::ConfidentMatch;
                 return self.state;
@@ -296,11 +320,59 @@ mod tests {
             &MatchParams::default(),
         );
         assert_eq!(session.outcome.as_ref().unwrap().margin_over_next, 1.0);
-        // Solo catalogs withhold ConfidentMatch entirely: with one track
-        // there is no runner-up, so margin cannot separate truth from lucky
-        // collisions. The match becomes acceptable once a second recording
-        // joins the catalog.
+        // Weak evidence on a solo catalog stays a candidate: without a
+        // runner-up margin, acceptance leans on the density floor and this
+        // query carries too few inliers to clear it.
         assert_eq!(state, RecognitionState::Candidate);
+    }
+
+    #[test]
+    fn dense_solo_catalog_evidence_confidently_matches() {
+        // One recording whose hashes align with a dense query stream at a
+        // single constant offset (real fingerprint batches emit several
+        // hashes per anchor frame): 40 distinct hashes across 8 frames =>
+        // density ~2.7, above the junk band (<1.7) measured in E11.
+        let mut idx = InMemoryIndex::new();
+        let catalog: Vec<(u32, u32)> = (0..40)
+            .map(|i| {
+                let t = 100 + (i as u32 / 5) * 2;
+                (500 + i as u32, t)
+            })
+            .collect();
+        idx.add_recording(RecordingId::new(0), &catalog);
+        idx.finalize();
+        let mut session = RecognitionSession::new(22_050, 1024);
+        // Query = catalog timeline shifted by a fixed offset of 90 frames.
+        let query: Vec<QueryFp> = (0..40)
+            .map(|i| QueryFp {
+                hash: 500 + i as u32,
+                anchor_time: 10 + (i as u32 / 5) * 2,
+            })
+            .collect();
+        let state = session.ingest(query, &idx, &MatchParams::default());
+        assert_eq!(state, RecognitionState::ConfidentMatch);
+        let o = session.outcome.as_ref().unwrap();
+        assert_eq!(o.recording.as_u32(), 0);
+        assert_eq!(o.offset_frames, 90);
+    }
+
+    #[test]
+    fn sparse_solo_catalog_evidence_stays_a_candidate() {
+        // Same hash identity but spread thin across the window: density ~0.2,
+        // the signature of scattered coincidence rather than aligned audio.
+        let mut idx = InMemoryIndex::new();
+        let catalog: Vec<(u32, u32)> = (0..40).map(|i| (500 + i as u32, 100 + i as u32)).collect();
+        idx.add_recording(RecordingId::new(0), &catalog);
+        idx.finalize();
+        let mut session = RecognitionSession::new(22_050, 1024);
+        let query: Vec<QueryFp> = (0..40)
+            .map(|i| QueryFp {
+                hash: 500 + i as u32,
+                anchor_time: i as u32 * 20, // 40 hashes over 780 frames
+            })
+            .collect();
+        let state = session.ingest(query, &idx, &MatchParams::default());
+        assert_ne!(state, RecognitionState::ConfidentMatch);
     }
 
     #[test]
