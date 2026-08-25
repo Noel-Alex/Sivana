@@ -36,16 +36,14 @@ fn temp_dir(name: &str) -> PathBuf {
 
 /// Build a small valid two-recording segment + manifest catalog.
 fn valid_catalog(dir: &std::path::Path) -> PathBuf {
+    use sivana_core::FingerprintVersion;
     use sivana_core::RecordingId;
     use sivana_index::manifest;
-    use sivana_index::segment::{SegmentBuilder};
-    use sivana_core::FingerprintVersion;
+    use sivana_index::segment::SegmentBuilder;
 
     let mut builder = SegmentBuilder::new();
     for rec in 0..2u32 {
-        let fps: Vec<(u32, u32)> = (0..500)
-            .map(|i| ((rec * 10_000 + i) as u32, i as u32))
-            .collect();
+        let fps: Vec<(u32, u32)> = (0..500).map(|i| (rec * 10_000 + i, i)).collect();
         builder.add_recording(RecordingId::new(rec), &fps);
     }
     let segment_path = dir.join("catalog-000001.siv");
@@ -54,9 +52,17 @@ fn valid_catalog(dir: &std::path::Path) -> PathBuf {
         .expect("build fixture segment");
     manifest::store_atomic(
         dir,
-        &manifest::Manifest::new(1, FingerprintVersion::new(1, 0), vec![
-            segment_path.file_name().unwrap().to_string_lossy().to_string(),
-        ]),
+        &manifest::Manifest::new(
+            1,
+            FingerprintVersion::new(1, 0),
+            vec![
+                segment_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            ],
+        ),
     )
     .unwrap();
     segment_path
@@ -146,15 +152,15 @@ fn manifest_parser_rejects_garbage_without_panic() {
         "{}".to_string(),
         r#"{"catalog_version": -1}"#.into(),
         r#"{"catalog_version": 1, "segments": null}"#.into(),
-        format!(
-            r#"{{"catalog_version": {}, "segments": []}}"#,
-            u64::MAX
-        ),
+        format!(r#"{{"catalog_version": {}, "segments": []}}"#, u64::MAX),
         r#"{"catalog_version": 1, "segments": ["../escape.siv"]}"#.into(),
         r#"{"catalog_version": 1, "fingerprint_major": "one"}"#.into(),
         format!(
             r#"{{"catalog_version": 1, "segments": [{}]}}"#,
-            (0..5_000).map(|i| format!(r#""seg{i}.siv""#)).collect::<Vec<_>>().join(",")
+            (0..5_000)
+                .map(|i| format!(r#""seg{i}.siv""#))
+                .collect::<Vec<_>>()
+                .join(",")
         ),
         "[".repeat(10_000),
         r#"{"a":{"a":{"a":{"a":"\ud800"}}}}"#.into(),
@@ -249,7 +255,10 @@ fn sfp1_decoder_contract_on_garbage() {
             bytes[at] = (rng.next() & 0xFF) as u8;
         }
         if let Some((_, fps)) = decode(&bytes) {
-            assert_eq!(fps.len(), (u32::from_le_bytes(bytes[12..16].try_into().unwrap())) as usize);
+            assert_eq!(
+                fps.len(),
+                (u32::from_le_bytes(bytes[12..16].try_into().unwrap())) as usize
+            );
         }
     }
 

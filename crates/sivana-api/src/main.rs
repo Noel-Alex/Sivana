@@ -309,10 +309,7 @@ fn clean_youtube_title(raw: &str, artist: &str) -> String {
     {
         title = title[prefix.len()..].trim().to_string();
     }
-    loop {
-        let Some(open) = title.rfind('(') else {
-            break;
-        };
+    while let Some(open) = title.rfind('(') {
         if !title.ends_with(')') {
             break;
         }
@@ -432,55 +429,54 @@ fn build_bundle(dir: Option<&PathBuf>) -> Bundle {
     let mut index = InMemoryIndex::new();
     let mut titles = HashMap::new();
     let mut version = 0u64;
-    if let Some(dir) = dir {
-        if dir.join(sivana_index::manifest::MANIFEST_FILE).is_file() {
-            match Catalog::open(dir) {
-                Ok(cat) => {
-                    version = cat.manifest.catalog_version;
-                    // Metadata file sits next to the manifest (Phase 6 formalizes it).
-                    let meta_path = dir.join("recordings.json");
-                    if let Ok(bytes) = std::fs::read(&meta_path) {
-                        if let Ok(map) =
-                            serde_json::from_slice::<HashMap<String, RecordingMeta>>(&bytes)
+    if let Some(dir) = dir
+        && dir.join(sivana_index::manifest::MANIFEST_FILE).is_file()
+    {
+        match Catalog::open(dir) {
+            Ok(cat) => {
+                version = cat.manifest.catalog_version;
+                // Metadata file sits next to the manifest (Phase 6 formalizes it).
+                let meta_path = dir.join("recordings.json");
+                if let Ok(bytes) = std::fs::read(&meta_path)
+                    && let Ok(map) =
+                        serde_json::from_slice::<HashMap<String, RecordingMeta>>(&bytes)
+                {
+                    for (k, v) in map {
+                        if let Ok(id) = k.parse::<u32>() {
+                            titles.insert(id, v);
+                        }
+                    }
+                }
+                // Materialize postings into the matcher index from the
+                // per-recording SFP1 sidecars written by ingestion
+                // (Phase 6); the .siv segments remain the serving format.
+                let sidecar = dir.join("fingerprints");
+                if sidecar.is_dir() {
+                    for entry in std::fs::read_dir(&sidecar).into_iter().flatten() {
+                        let Some(p) = entry.ok().map(|e| e.path()) else {
+                            continue;
+                        };
+                        if let Ok(bytes) = std::fs::read(&p)
+                            && let Some((_, fps)) = decode_sfp_batch(&bytes)
                         {
-                            for (k, v) in map {
-                                if let Ok(id) = k.parse::<u32>() {
-                                    titles.insert(id, v);
-                                }
-                            }
-                        }
-                    }
-                    // Materialize postings into the matcher index from the
-                    // per-recording SFP1 sidecars written by ingestion
-                    // (Phase 6); the .siv segments remain the serving format.
-                    let sidecar = dir.join("fingerprints");
-                    if sidecar.is_dir() {
-                        for entry in std::fs::read_dir(&sidecar).into_iter().flatten() {
-                            let p = entry.ok().map(|e| e.path());
-                            if let Some(p) = p {
-                                if let Ok(bytes) = std::fs::read(&p) {
-                                    if let Some((_, fps)) = decode_sfp_batch(&bytes) {
-                                        index.add_recording(
-                                            RecordingId::new(
-                                                p.file_stem()
-                                                    .and_then(|s| s.to_str())
-                                                    .and_then(|s| s.parse::<u32>().ok())
-                                                    .unwrap_or(0),
-                                            ),
-                                            &fps.iter().map(|&(h, t)| (h, t)).collect::<Vec<_>>(),
-                                        );
-                                    }
-                                }
-                            }
+                            index.add_recording(
+                                RecordingId::new(
+                                    p.file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .and_then(|s| s.parse::<u32>().ok())
+                                        .unwrap_or(0),
+                                ),
+                                &fps.iter().map(|&(h, t)| (h, t)).collect::<Vec<_>>(),
+                            );
                         }
                     }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "catalog open failed ({}): {e}; starting empty",
-                        dir.display()
-                    );
-                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "catalog open failed ({}): {e}; starting empty",
+                    dir.display()
+                );
             }
         }
     }
@@ -878,7 +874,11 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
             break;
         }
         let Some((sample_rate, fps)) = decode_sfp_batch(&bytes) else {
-            tracing::warn!(session_id, bytes = bytes.len(), "batch rejected: malformed SFP1");
+            tracing::warn!(
+                session_id,
+                bytes = bytes.len(),
+                "batch rejected: malformed SFP1"
+            );
             send_event(
                 &mut socket,
                 serde_json::json!({ "event": "error", "detail": "malformed batch" }),
@@ -1067,7 +1067,10 @@ async fn cors_allow_local(
         let mut res = axum::http::Response::new(axum::body::Body::empty());
         *res.status_mut() = axum::http::StatusCode::NO_CONTENT;
         let h = res.headers_mut();
-        h.insert("Access-Control-Allow-Origin", axum::http::HeaderValue::from_static("*"));
+        h.insert(
+            "Access-Control-Allow-Origin",
+            axum::http::HeaderValue::from_static("*"),
+        );
         h.insert(
             "Access-Control-Allow-Methods",
             axum::http::HeaderValue::from_static("GET,POST"),
@@ -1146,7 +1149,8 @@ async fn main() {
         std::fs::create_dir_all(dir).expect("create catalog directory");
     }
     let started_at = Instant::now();
-    let bundle = Arc::new(build_bundle(catalog.as_ref()));    println!(
+    let bundle = Arc::new(build_bundle(catalog.as_ref()));
+    println!(
         "catalog v{}: {} hashes indexed in {:.2}s",
         bundle.catalog_version,
         bundle.index.len(),
@@ -1244,10 +1248,10 @@ mod tests {
         ip: IpAddr,
     ) -> Response {
         let app = build_router(state, std::path::Path::new("apps/web"));
-        let mut req = Request::builder()
-            .method(Method::POST)
-            .uri(uri)
-            .header("content-type", format!("multipart/form-data; boundary={TEST_BOUNDARY}"));
+        let mut req = Request::builder().method(Method::POST).uri(uri).header(
+            "content-type",
+            format!("multipart/form-data; boundary={TEST_BOUNDARY}"),
+        );
         for (name, value) in headers {
             req = req.header(*name, *value);
         }
@@ -1348,10 +1352,7 @@ mod tests {
             state,
             "/v1/recordings",
             &[],
-            multipart_body(&[
-                ("token", "hunter2"),
-                ("source_url", "definitely not a url"),
-            ]),
+            multipart_body(&[("token", "hunter2"), ("source_url", "definitely not a url")]),
             IpAddr::from([10, 0, 0, 2]),
         )
         .await;
@@ -1389,7 +1390,11 @@ mod tests {
         // Fill the map to exactly the cap (sessions are TTL-evicted in
         // production, so map size == active count).
         for i in 0..MAX_CONCURRENT_SESSIONS {
-            state.sessions.lock().await.insert(i as u64, recognition::RecognitionSession::new(22_050, 1024));
+            state
+                .sessions
+                .lock()
+                .await
+                .insert(i as u64, recognition::RecognitionSession::new(22_050, 1024));
         }
         let err = create_session_for_ip(state.clone(), ip).await.unwrap_err();
         assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS);

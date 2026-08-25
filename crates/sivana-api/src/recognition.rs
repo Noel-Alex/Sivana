@@ -191,8 +191,7 @@ impl RecognitionSession {
                     && top.unique_aligned >= GATE_MIN_UNIQUE_ALIGNED
                     && top.margin_over_next >= GATE_MIN_MARGIN
             };
-            if accepted
-            {
+            if accepted {
                 self.state = RecognitionState::ConfidentMatch;
                 return self.state;
             }

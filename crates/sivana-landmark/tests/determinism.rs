@@ -16,8 +16,8 @@
 use sivana_audio::fixtures;
 use sivana_core::hash::pack_hash32;
 use sivana_ingest::FREQ_BANDS;
-use sivana_landmark::fingerprint;
 use sivana_landmark::LandmarkV2Config;
+use sivana_landmark::fingerprint;
 
 fn ingest_config() -> LandmarkV2Config {
     LandmarkV2Config {
@@ -122,8 +122,8 @@ fn silence_prefix_shifts_anchor_times_preserving_hashes() {
 /// across floating-point environments but the decision may not flip.
 #[test]
 fn recognition_decision_is_platform_independent() {
-    use sivana_match::{InMemoryIndex, MatchParams, QueryFp};
     use sivana_core::RecordingId;
+    use sivana_match::{InMemoryIndex, MatchParams, QueryFp};
 
     let cfg = ingest_config();
     let mut idx = InMemoryIndex::new();
@@ -132,7 +132,9 @@ fn recognition_decision_is_platform_independent() {
         let fps = fingerprint(&song, 22_050, &cfg);
         idx.add_recording(
             RecordingId::new(rec),
-            &fps.iter().map(|f| (f.hash, f.anchor_time)).collect::<Vec<_>>(),
+            &fps.iter()
+                .map(|f| (f.hash, f.anchor_time))
+                .collect::<Vec<_>>(),
         );
     }
     idx.finalize();
@@ -146,7 +148,10 @@ fn recognition_decision_is_platform_independent() {
     let q = fingerprint(&degraded, 22_050, &cfg);
     let qfps: Vec<QueryFp> = q
         .iter()
-        .map(|f| QueryFp { hash: f.hash, anchor_time: f.anchor_time })
+        .map(|f| QueryFp {
+            hash: f.hash,
+            anchor_time: f.anchor_time,
+        })
         .collect();
 
     let outcomes = idx.query(&qfps, &MatchParams::default());
@@ -176,7 +181,7 @@ fn recognition_decision_is_platform_independent() {
 /// future change to `pack_hash32` shows up as a deliberate format bump.
 #[test]
 fn pack_hash32_encoding_is_pinned() {
-    use sivana_core::hash::{unpack_hash32, Hash32};
+    use sivana_core::hash::{Hash32, unpack_hash32};
 
     // Documented field layout: f1 | f2 | dt packed MSB-first.
     let h = pack_hash32(123, 456, 7);
@@ -192,5 +197,8 @@ fn pack_hash32_encoding_is_pinned() {
     }
     assert_eq!(seen.len(), 64 * 8, "pack_hash32 collisions in probe set");
     // Pinned literal: guards the wire/index format against silent change.
-    assert_eq!(pack_hash32(123, 456, 7), Hash32((123 << 20) | (456 << 8) | 7));
+    assert_eq!(
+        pack_hash32(123, 456, 7),
+        Hash32((123 << 20) | (456 << 8) | 7)
+    );
 }

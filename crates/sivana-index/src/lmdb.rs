@@ -68,7 +68,7 @@ impl LmdbIndex {
         let rtxn = self.env.read_txn()?;
         match self.db.get(&rtxn, &hash)? {
             Some(bytes) => {
-                for chunk in bytes.chunks_exact(8) {
+                for chunk in bytes.as_chunks::<8>().0 {
                     let rec = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                     let t = ((chunk[4] as u32) << 16) | ((chunk[5] as u32) << 8) | chunk[6] as u32;
                     out.push(crate::segment::Posting {

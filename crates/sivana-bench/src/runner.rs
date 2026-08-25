@@ -767,7 +767,6 @@ pub fn run_e9_b1_levers(
     let excerpt_seconds = 8.0_f32;
     let positions_per_track = 2usize;
 
-
     // Degradation set focused on the B1-owned failure classes plus clean
     // and pink-noise references (E5 grid subset).
     let degs = [
@@ -780,11 +779,7 @@ pub fn run_e9_b1_levers(
 
     let variants: [(&str, TripletsConfig, bool); 4] = [
         ("b1-e5-baseline", TripletsConfig::default(), false),
-        (
-            "b1-df-weighted",
-            TripletsConfig::default(),
-            true,
-        ),
+        ("b1-df-weighted", TripletsConfig::default(), true),
         (
             "b1-quantized",
             TripletsConfig {
@@ -809,7 +804,10 @@ pub fn run_e9_b1_levers(
         for t in &corpus.tracks {
             let peaks = detect_peaks(&t.samples, sample_rate, &cfg);
             let fps = fingerprint_triplets(&peaks, &tcfg);
-            index.add_recording(t.recording, &fps.iter().map(|f| (f.hash, f.t1)).collect::<Vec<_>>());
+            index.add_recording(
+                t.recording,
+                &fps.iter().map(|f| (f.hash, f.t1)).collect::<Vec<_>>(),
+            );
         }
         index.finalize();
 
@@ -820,16 +818,11 @@ pub fn run_e9_b1_levers(
 
         for (ti, track) in corpus.tracks.iter().enumerate() {
             for pos_i in 0..positions_per_track {
-                let mut rng =
-                    XorShift64Star::new(seed ^ 0x51E5).derive((ti * 977 + pos_i) as u64);
+                let mut rng = XorShift64Star::new(seed ^ 0x51E5).derive((ti * 977 + pos_i) as u64);
                 let max_start = (duration_s - excerpt_seconds - 0.1).max(0.0);
                 let start_s = rng.next_f32() * max_start;
-                let clean = fixtures::excerpt(
-                    &track.samples,
-                    sample_rate,
-                    start_s,
-                    excerpt_seconds,
-                );
+                let clean =
+                    fixtures::excerpt(&track.samples, sample_rate, start_s, excerpt_seconds);
                 for deg in &degs {
                     let query = deg.apply(&clean, sample_rate, case_id as u64);
                     case_id += 1;
@@ -852,8 +845,7 @@ pub fn run_e9_b1_levers(
         let mut rej_inliers: Vec<usize> = Vec::new();
         for k in 0..5u64 {
             let held_seed = seed ^ 0xDEAD_BEEF ^ k.wrapping_mul(0xA5A5_5A5A);
-            let held =
-                fixtures::synth_song(held_seed, excerpt_seconds + 2.0, sample_rate);
+            let held = fixtures::synth_song(held_seed, excerpt_seconds + 2.0, sample_rate);
             for (di, deg) in degs.iter().enumerate() {
                 let query = deg.apply(&held, sample_rate, 0xC0FFEE + di as u64);
                 let qpeaks = detect_peaks(&query, sample_rate, &cfg);
@@ -872,7 +864,11 @@ pub fn run_e9_b1_levers(
 
         results.push(E9Variant {
             name: name.into(),
-            recall_track: if total == 0 { 0.0 } else { hits as f64 / total as f64 },
+            recall_track: if total == 0 {
+                0.0
+            } else {
+                hits as f64 / total as f64
+            },
             false_accepts_210: fa_210,
             rejection_cases: rej_inliers.len(),
             max_rejection_inliers: rej_inliers.last().copied().unwrap_or(0),

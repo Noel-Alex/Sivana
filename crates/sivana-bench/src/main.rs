@@ -285,7 +285,10 @@ fn main() -> Result<(), String> {
         } => {
             let results = runner::run_e9_b1_levers(tracks, seconds, sample_rate, seed)
                 .map_err(|e| format!("E9 run failed: {e}"))?;
-            println!("{:^18} | {:>8} | {:>6} | {:>8} | {:>8}", "variant", "recall", "FA", "maxRej", "medMatch");
+            println!(
+                "{:^18} | {:>8} | {:>6} | {:>8} | {:>8}",
+                "variant", "recall", "FA", "maxRej", "medMatch"
+            );
             for v in &results {
                 println!(
                     "{:^18} | {:>7.1}% | {}/{} | {:>8} | {:>8.0}",

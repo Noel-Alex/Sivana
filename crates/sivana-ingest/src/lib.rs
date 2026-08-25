@@ -50,7 +50,7 @@ pub struct RecordingMetadata {
 
 fn load_json<T>(path: &Path) -> Option<T>
 where
-    T: for<'a> serde::de::DeserializeOwned,
+    T: serde::de::DeserializeOwned,
 {
     std::fs::read(path)
         .ok()

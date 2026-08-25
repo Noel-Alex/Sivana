@@ -40,7 +40,13 @@ fn megalovania_excerpt_matches_served_index() {
     let ref_fps = sivana_landmark::fingerprint(reference, 22_050, &cfg);
     assert!(!ref_fps.is_empty(), "reference produced no fingerprints");
     let mut index = InMemoryIndex::new();
-    index.add_recording(RecordingId::new(0), &ref_fps.iter().map(|f| (f.hash, f.anchor_time)).collect::<Vec<_>>());
+    index.add_recording(
+        RecordingId::new(0),
+        &ref_fps
+            .iter()
+            .map(|f| (f.hash, f.anchor_time))
+            .collect::<Vec<_>>(),
+    );
     index.finalize();
 
     // Query: a 6 s excerpt from 30 s in (past the intro) — different decode
@@ -73,7 +79,11 @@ fn megalovania_excerpt_matches_served_index() {
     assert_eq!(top.recording.as_u32(), 0);
     // E4-calibrated gate constants (bands=512, tol=2): a true self-match
     // must clear what the streaming session would demand of it.
-    assert!(top.inliers >= 7, "gate would reject: {} inliers", top.inliers);
+    assert!(
+        top.inliers >= 7,
+        "gate would reject: {} inliers",
+        top.inliers
+    );
     assert!(
         top.offset_concentration >= 0.5,
         "gate would reject: conc {}",
