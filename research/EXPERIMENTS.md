@@ -306,3 +306,89 @@ speed/pitch/stretch axis
 - **Artifacts:** sweep harness + raw JSON in job tmp dir;
   recognition.rs carries the calibrated constants with rationale.
 
+## E11b. Acoustic-channel failure: phone-speaker EQ loss vs the solo density gate
+
+- **Date:** 2026-08-25
+- **Question:** After E11, a user playing MEGALOVANIA over PHONE SPEAKERS
+  into the microphone still got NO_MATCH, even though clean-file queries
+  matched instantly and ingestion was verified correct. What does the
+  acoustic channel do to the evidence?
+- **Method:** Simulated the channel on the query signal only
+  (2nd-order Butterworth 300 Hz highpass = small-speaker bass loss;
+  + pink noise at 12/20 dB SNR; + room slapback) and streamed through
+  the production WS path. Instrumented per-evaluation candidate events,
+  plus offline offset-histogram analysis of query-vs-catalog hashes.
+- **Result:** Highpass alone is the killer — adding noise on top MATCHES.
+  The start=60s trace shows why:
+
+  | capture | inliers | conc | span | density | state |
+  |---|---:|---:|---:|---:|---|
+  | 4 s | 94 | 1.00 | 46 | 2.0 | candidate |
+  | 8 s | 217 | 1.00 | 89 | 2.4 | candidate |
+  | 12 s | 268 | 1.00 | 149 | 1.8 | **no_match (timeout)** |
+
+  Alignment stays PERFECT (conc 1.0, hundreds of inliers) but arrives at
+  half the clean-audio rate because bass removal strips the loudest
+  landmarks. Cumulative density = inliers/(span+1) therefore *decays*
+  toward ~1.8-2.4 as capture continues — below the E11 floor of 2.5.
+  Longer listening made acceptance HARDER. Offline histograms confirm:
+  hp300 keeps 28% hash overlap with clean, spread across cyclic-riff
+  offsets rather than lost entirely.
+- **Findings:**
+  1. Density measured cumulatively conflates alignment quality with
+     capture duration. Junk densities top out at 1.36; degraded-but-true
+     steady-state sits at ~1.7-2.5. The 2.5 floor sat INSIDE the true
+     band (same calibration error class as E10's margin floor).
+  2. Noise helping is diagnostic, not paradoxical: it decorrelates the
+     weak spurious cyclic alignments while the true alignment survives,
+     restoring concentration/density headroom.
+- **Decision: GATE_SOLO_MIN_DENSITY 2.5 -> 1.5** (mid-band between junk
+  <=1.36 and degraded-true >=~1.7). Inlier floor stays 30; conc stays
+  0.8. Validated live: hp300 matches 6/6 positions (was flaky/never),
+  out-of-catalog tracks still reject.
+- **Artifacts:** ws-probe.js / vote-split.js harnesses in job tmp dir;
+  gate constants carry the measured rationale inline.
+
+
+
+## E11c. Solo-catalog confirmation: growth + absolute mass floor
+
+- **Date:** 2026-08-25
+- **Question:** E11b's density floor of 1.5 admitted a NEW false accept:
+  MEGALOVANIA's motif is reprised inside Lost Girl, so a lost-girl query
+  accumulates REAL catalog hits at conc 1.0 (density 2.06, 33 inliers by
+  12 s). Lowering density to admit degraded-true audio also admitted
+  melodic quotation. Can one solo-catalog gate separate
+  {junk scatter, quotation} from {clean true, phone-EQ-degraded true}?
+- **Measured bands** (live WS traces, single-track catalog):
+
+  | population | density | conc | inliers @ 12 s |
+  |---|---|---|---:|
+  | junk scatter | <=1.36 | <0.8 | ~40 |
+  | lost-girl quotation | 2.06 | 1.00 | 33->110 ceiling |
+  | degraded true (hp300) | 1.95-2.5 sustained | ~1.0 | >=264 |
+  | clean true | 4-9 | ~1.0 | >=1000 |
+
+- **Why growth alone failed:** the reprise reading eventually dominates
+  with conc 1.0 and monotone growth — a growing-but-small match is
+  indistinguishable from a growing true match without an absolute scale.
+- **Decision: two-stage gate.**
+  1. *Arm* when floors clear: inliers>=30, conc>=0.8,
+     density>=2.0, unique_aligned>=GATE_MIN_UNIQUE_ALIGNED. Sticky per
+     recording; disarmed if top candidate changes.
+  2. *Confirm* only when elapsed>=GATE_SOLO_CONFIRM_SECONDS (2.0),
+     inlier growth since arming>=GATE_SOLO_CONFIRM_GROWTH (8), AND
+     inliers>=GATE_SOLO_CONFIRM_MIN_INLIERS (**150**).
+  Density floor back to 2.0: safe now because acceptance no longer rests
+  on it alone; the 150-mass requirement does the separation. Quotation
+  tops out around ~110 inliers on this corpus (reprises are short);
+  degraded-true reaches 220-700 within MAX_CAPTURE_SECONDS.
+- **Validation matrix** (15/15): hp300 true matched at starts
+  {0,30,60,90,120} (mass 220-697); lost-girl@{0,30} rejected;
+  all 7 out-of-catalog tracks rejected; clean true matched (1097).
+  Unit tests pin all three populations: dense_solo_...matches (confirm
+  reached), stalled_solo_...does_not_confirm (growth w/o mass),
+  sparse_solo_...stays_a_candidate (never arms).
+- **Known limit:** thresholds calibrated on this corpus; a second catalog
+  track switches the session to the margin gate (E10), which separates
+  cleanly. Documented for recalibration as the catalog grows.
