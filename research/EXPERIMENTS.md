@@ -392,3 +392,75 @@ speed/pitch/stretch axis
 - **Known limit:** thresholds calibrated on this corpus; a second catalog
   track switches the session to the margin gate (E10), which separates
   cleanly. Documented for recalibration as the catalog grows.
+
+## E12. Real-channel failure: room tone out-votes the song
+
+- **Date:** 2026-08-25
+- **Question:** E11c's gate passed every simulated probe, yet the REAL
+  path (phone speakers -> laptop mic) never matched. Is the acoustic
+  channel what the hp300 simulation assumed?
+- **Method:** Physical captures on this machine (ffmpeg dshow, Realtek
+  mic array; playback via SoundPlayer), fingerprinted offline + through
+  the live WS at REALTIME pacing (the wall-clock confirm stage makes
+  faster-than-realtime probes invalid — a 1.3s burst can never satisfy
+  a 2s elapsed requirement).
+- **Measured:** pure ROOM TONE emitted 1084 fingerprints/s vs 1117 for
+  the actual song — the peak picker had no stationarity concept, and
+  stationary noise peaks cleared the per-frame median prominence test as
+  easily as music. Silence banked up to 50 aligned inliers against the
+  repetitive synth catalog (self-alignment of hum with cyclic riffs);
+  the true far-field capture banked only 34. The negative band OVERLAPPED
+  AND EXCEEDED the true band: no threshold on those features could work.
+- **Failed first fix:** asymmetric-EMA background (rise tau 8 / fall
+  tau 43 frames). Measured ZERO fingerprints from a real -39 dB music
+  window while post-playback AGC noise bursts emitted thousands — a fast
+  rise-tau absorbs any note longer than the tau, so musical sustain
+  self-cancels. Inverted discrimination.
+- **Fix: minimum-statistics whitening** in PeakStreamer. Each candidate
+  peak must exceed its own bin's MINIMUM level over a trailing ~4 s
+  window by 6 dB. Music constantly dips below its own peaks (decays,
+  vibrato, note changes), refreshing the floor, so sustained tones
+  survive; stationary content never dips and stays pinned at the floor,
+  rejected. Per-frame floor snapshots keep streaming == batch exactly.
+  Both ingest and query share the pipeline -> catalog re-ingested
+  (162948 -> ~100k fps; stationary/sustained content legitimately yields
+  fewer landmarks).
+- **Result:** room tone phantom evidence collapsed to <=10 inliers.
+  BUT quotation evidence (lost-girl) survived — it is genuine MUSICAL
+  alignment, not noise — so the solo gate needed a new discriminator.
+
+## E13. Solo gate: alignment tightness separates truth from quotation
+
+- **Date:** 2026-08-25
+- **Method:** full per-evaluation feature traces under the E12 engine,
+  realtime pacing. Mass alone CANNOT separate (negatives reach 65-67 vs
+  true 76). The discriminator is offset_concentration measured inside
+  the winning +-2-frame bucket:
+- **Bands:**
+
+  | population | conc | peak inliers |
+  |---|---|---:|
+  | true playback (clean/hp300 file) | **0.98-1.00 from first eval** | 76-495 |
+  | lost-girl quotation | <=0.88 | 67 |
+  | spider-dance shared-patch collision | <=0.904 | 94 |
+  | other negatives + room tone | scattered | <=27 |
+
+  True playback reproduces the catalog's exact sample timing, so nearly
+  all votes land in one offset bucket; quotation smears (tempo drift).
+- **Gate:** conc >= 0.95 (centered in the (0.904, 0.98) gap) with either
+  a young spike (>=20 inliers while span <=16 — matches within ~0.5 s)
+  or mass >= 64. Arm/confirm machinery retired (growth was a ceiling
+  trap: arming late on a saturated window can never grow +8; density
+  punished capture length).
+- **Validation 15/15** (realtime-paced live WS): megalovania clean +
+  hp300 matched at all tested positions {0,30,60,90,120}; lost-girl,
+  spider-dance, hopes-and-dreams, my-castle-town, petal-dance, core,
+  asgore, fallen-down, room tone all rejected.
+- **Environment caveats found en route** (this machine): Realtek mic
+  array APO applies aggressive AGC that ducks sustained music toward
+  the noise floor (capture RMS swings -38.5 -> -57 dB mid-song);
+  ffplay playback routes into VoiceMeeter and never reaches speakers.
+  Physical far-field captures remain below-floor (correct rejections):
+  their aligned evidence after whitening is genuinely tiny. The browser
+  pipeline itself was verified end-to-end healthy via headless Edge +
+  fake-mic WAV replay (matched even harshest phone-proxy profiles).
