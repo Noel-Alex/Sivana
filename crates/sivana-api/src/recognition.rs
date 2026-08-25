@@ -126,6 +126,23 @@ impl RecognitionSession {
         self.started_at.elapsed().as_secs_f32()
     }
 
+    /// Fraction of the session's fingerprints whose hash exists anywhere
+    /// in the catalog (E12 channel-health metric). File queries run
+    /// 20-50%; healthy microphone captures 5-15%; broken chains (stale
+    /// wasm vs re-ingested catalog, wrong sample-rate handling) <2%.
+    /// Surfaced on every candidate/matched/no_match event.
+    pub fn catalog_hit_rate(&self, index: &InMemoryIndex) -> f32 {
+        if self.fps.is_empty() {
+            return 0.0;
+        }
+        let hits = self
+            .fps
+            .iter()
+            .filter(|fp| index.postings_for(fp.hash).is_some())
+            .count();
+        hits as f32 / self.fps.len() as f32
+    }
+
     /// Eagerly enforce the capture timeout: a client that stops (or
     /// finishes) streaming must still get a terminal event instead of
     /// hanging until its next batch. Called on a timer by the server;

@@ -831,23 +831,34 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
         let next = tokio::time::timeout(Duration::from_millis(250), socket.recv()).await;
         let msg = match next {
             Err(_elapsed) => {
+                let bundle = state.snapshot();
                 let mut sessions = state.sessions.lock().await;
-                let capture = if let Some(s) = sessions.get_mut(&session_id) {
+                // (hit_rate, capture) — hit_rate rides along so a silent
+                // client's timeout still carries channel diagnostics.
+                let outcome_info = if let Some(s) = sessions.get_mut(&session_id) {
                     if s.poll_timeout() == recognition::RecognitionState::NoMatch {
-                        Some(s.capture_seconds())
+                        Some((s.catalog_hit_rate(&bundle.index), s.capture_seconds()))
+                    } else if connected_at.elapsed().as_secs_f32() > recognition::MAX_CAPTURE_SECONDS
+                    {
+                        Some((
+                            s.catalog_hit_rate(&bundle.index),
+                            connected_at.elapsed().as_secs_f32(),
+                        ))
                     } else {
                         None
                     }
-                } else if connected_at.elapsed().as_secs_f32() > recognition::MAX_CAPTURE_SECONDS {
-                    Some(connected_at.elapsed().as_secs_f32())
                 } else {
                     None
                 };
                 drop(sessions);
-                if let Some(capture) = capture {
+                if let Some((hit_rate, capture)) = outcome_info {
                     send_event(
                         &mut socket,
-                        serde_json::json!({ "event": "no_match", "capture_seconds": capture }),
+                        serde_json::json!({
+                            "event": "no_match",
+                            "capture_seconds": capture,
+                            "hit_rate": hit_rate,
+                        }),
                     )
                     .await;
                     let _ = socket.send(Message::Close(None)).await;
@@ -919,6 +930,10 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
             )
         });
 
+        // Channel-health metric (E12): share of session fingerprints that
+        // exist in the catalog at all. Diagnoses stale-wasm/re-ingest
+        // splits (<2%) vs genuinely weak acoustic channels (5-15%).
+        let hit_rate = session.catalog_hit_rate(&bundle.index);
         let event = match (new_state, outcome) {
             (recognition::RecognitionState::ConfidentMatch, Some(o)) => {
                 let rec_id = o.recording.as_u32();
@@ -938,6 +953,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
                     "mean_rarity": o.mean_rarity,
                     "concentration": o.offset_concentration,
                     "margin": o.margin_over_next,
+                    "hit_rate": hit_rate,
                     "capture_seconds": capture,
                 })
             }
@@ -951,6 +967,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
                     "mean_rarity": o.mean_rarity,
                     "concentration": o.offset_concentration,
                     "margin": o.margin_over_next,
+                    "hit_rate": hit_rate,
                     "capture_seconds": capture,
                 })
             }
@@ -964,6 +981,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
                     "mean_rarity": o.mean_rarity,
                     "concentration": o.offset_concentration,
                     "margin": o.margin_over_next,
+                    "hit_rate": hit_rate,
                     "capture_seconds": capture,
                 })
             }
