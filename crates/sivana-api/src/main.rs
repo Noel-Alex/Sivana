@@ -838,7 +838,8 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
                 let outcome_info = if let Some(s) = sessions.get_mut(&session_id) {
                     if s.poll_timeout() == recognition::RecognitionState::NoMatch {
                         Some((s.catalog_hit_rate(&bundle.index), s.capture_seconds()))
-                    } else if connected_at.elapsed().as_secs_f32() > recognition::MAX_CAPTURE_SECONDS
+                    } else if connected_at.elapsed().as_secs_f32()
+                        > recognition::MAX_CAPTURE_SECONDS
                     {
                         Some((
                             s.catalog_hit_rate(&bundle.index),
