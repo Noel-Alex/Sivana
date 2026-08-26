@@ -835,19 +835,24 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, session_id: u64) {
                 let mut sessions = state.sessions.lock().await;
                 // (hit_rate, capture) — hit_rate rides along so a silent
                 // client's timeout still carries channel diagnostics.
+                // E14: only poll_timeout decides. The old connected_at
+                // fallback killed by CONNECTION age, which fires earlier
+                // than capture age whenever the client warms up slowly —
+                // it murdered mid-stream sessions before their own
+                // deadline (observed as an abrupt close with no event).
                 let outcome_info = if let Some(s) = sessions.get_mut(&session_id) {
                     if s.poll_timeout() == recognition::RecognitionState::NoMatch {
                         Some((s.catalog_hit_rate(&bundle.index), s.capture_seconds()))
-                    } else if connected_at.elapsed().as_secs_f32()
-                        > recognition::MAX_CAPTURE_SECONDS
-                    {
-                        Some((
-                            s.catalog_hit_rate(&bundle.index),
-                            connected_at.elapsed().as_secs_f32(),
-                        ))
                     } else {
                         None
                     }
+                } else if connected_at.elapsed().as_secs_f32()
+                    > recognition::MAX_CAPTURE_SECONDS + recognition::CANDIDATE_EXTENSION_SECONDS
+                {
+                    // Never received a batch at all: no session exists to
+                    // poll, so bound the connection by the longest possible
+                    // deadline.
+                    Some((0.0, connected_at.elapsed().as_secs_f32()))
                 } else {
                     None
                 };

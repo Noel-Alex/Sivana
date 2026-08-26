@@ -70,6 +70,15 @@ const CANDIDATE_MIN_INLIERS: usize = 4;
 const CANDIDATE_MIN_CONCENTRATION: f32 = 0.3;
 /// Give up after this much captured audio without a confident match.
 pub const MAX_CAPTURE_SECONDS: f32 = 12.0;
+/// E14: one-time deadline extension for LIVE candidates. Measured on a
+/// real phone-speaker->mic session (debug-cap round trip): starting
+/// listening mid-song means the whitening engine feeds off onsets, so
+/// evidence accrues slowly but MONOTONICALLY — 10 -> 17 -> 27 -> 40 ->
+/// 51 tight-aligned (conc 1.0) inliers at the 12 s cap, still climbing,
+/// killed 13 short of confirmation. A candidate that is demonstrably
+/// alive gets 6 more seconds instead of a wrong no_match; anything
+/// weaker dies on schedule. Granted once per session.
+pub const CANDIDATE_EXTENSION_SECONDS: f32 = 6.0;
 /// Re-running a full catalog query for every AudioWorklet message creates
 /// quadratic work as the evidence window grows. A 250 ms audio-time cadence
 /// is responsive while keeping matching comfortably ahead of real time.
@@ -98,6 +107,8 @@ pub struct RecognitionSession {
     /// Latest audio anchor included in a full matcher evaluation.
     last_evaluated_anchor: Option<u32>,
     min_query_stride_frames: u32,
+    /// E14: whether the one-time live-candidate extension was granted.
+    extension_used: bool,
     #[cfg(test)]
     evaluations: usize,
 }
@@ -117,6 +128,7 @@ impl RecognitionSession {
             max_window_frames: (fps_rate * 10.0) as u32,
             last_evaluated_anchor: None,
             min_query_stride_frames: (fps_rate * QUERY_CADENCE_SECONDS).ceil() as u32,
+            extension_used: false,
             #[cfg(test)]
             evaluations: 0,
         }
@@ -149,9 +161,34 @@ impl RecognitionSession {
     /// returns the state after any transition. A Candidate that never
     /// strengthens within the window is also a NoMatch — otherwise weak
     /// queries hang forever.
+    ///
+    /// E14: a LIVE candidate at the cap earns ONE extension — mid-song
+    /// starts feed the whitening engine slowly but monotonically, and the
+    /// measured failure mode was confirmation arriving seconds after the
+    /// deadline. The extension is consumed by this grant; the next
+    /// deadline is final.
     pub fn poll_timeout(&mut self) -> RecognitionState {
-        if (self.state == RecognitionState::Listening || self.state == RecognitionState::Candidate)
-            && self.capture_seconds() > MAX_CAPTURE_SECONDS
+        // Extension eligibility mirrors the E13 tightness prong: only a
+        // candidate whose alignment is TIGHT (conc >= 0.95) proves live
+        // music rather than stationary scatter. Room tone and shared-patch
+        // collisions drift through offset buckets: they die at the base
+        // deadline exactly like plain listening — no extra time, no
+        // lingering candidate state.
+        let live = matches!(self.outcome,
+            Some(ref o) if o.offset_concentration >= GATE_SPIKE_MIN_CONCENTRATION);
+        if !self.extension_used && self.capture_seconds() > MAX_CAPTURE_SECONDS {
+            if self.state == RecognitionState::Candidate && live {
+                self.extension_used = true;
+                return self.state; // keep listening to +CANDIDATE_EXTENSION_SECONDS
+            }
+            if matches!(
+                self.state,
+                RecognitionState::Listening | RecognitionState::Candidate
+            ) {
+                self.state = RecognitionState::NoMatch;
+            }
+        } else if self.extension_used
+            && self.capture_seconds() > MAX_CAPTURE_SECONDS + CANDIDATE_EXTENSION_SECONDS
         {
             self.state = RecognitionState::NoMatch;
         }
@@ -186,9 +223,7 @@ impl RecognitionSession {
             })
         });
         if !should_evaluate {
-            if self.capture_seconds() > MAX_CAPTURE_SECONDS {
-                self.state = RecognitionState::NoMatch;
-            }
+            let _ = self.poll_timeout();
             return self.state;
         }
         self.last_evaluated_anchor = latest_anchor;
@@ -248,13 +283,17 @@ impl RecognitionSession {
                 && top.offset_concentration >= CANDIDATE_MIN_CONCENTRATION
             {
                 self.state = RecognitionState::Candidate;
+                // The deadline must also be enforced on this path: during
+                // streaming this branch returns every evaluation, and a
+                // client pacing under the 250 ms tick threshold would
+                // otherwise ride past MAX_CAPTURE_SECONDS forever.
+                let _ = self.poll_timeout();
                 return self.state;
             }
         }
 
-        if self.capture_seconds() > MAX_CAPTURE_SECONDS {
-            self.state = RecognitionState::NoMatch;
-        } else {
+        let _ = self.poll_timeout();
+        if self.state != RecognitionState::NoMatch {
             self.state = RecognitionState::Listening;
         }
         self.state
@@ -372,6 +411,64 @@ mod tests {
         // runner-up margin, acceptance leans on the absolute mass floor
         // and this query carries too few inliers to clear it.
         assert_eq!(state, RecognitionState::Candidate);
+    }
+
+    #[test]
+    fn live_candidate_earns_one_deadline_extension() {
+        // E14, from the real debug-cap round trip: a mid-song start feeds
+        // evidence slowly but monotonically; at the 12 s cap the measured
+        // session sat at 51 tight-aligned inliers still climbing and was
+        // killed 13 short. A live candidate must get one extension and
+        // confirm inside it.
+        let mut idx = InMemoryIndex::new();
+        let catalog: Vec<(u32, u32)> = (0..200).map(|i| (500 + i, 100 + i)).collect();
+        idx.add_recording(RecordingId::new(0), &catalog);
+        idx.finalize();
+        let mut session = RecognitionSession::new(22_050, 1024);
+        // Slow ramp: 51 aligned hashes by the cap (below the E13 floor of
+        // 64), tight at conc ~1.
+        let burst: Vec<QueryFp> = (0..30)
+            .map(|i| QueryFp {
+                hash: 500 + i,
+                anchor_time: 10 + i,
+            })
+            .collect();
+        let state1 = session.ingest(burst, &idx, &MatchParams::default());
+        assert_eq!(state1, RecognitionState::Candidate);
+        // Push the clock just past the base deadline: poll must GRANT the
+        // extension, not kill the session.
+        session.started_at -= std::time::Duration::from_secs_f32(MAX_CAPTURE_SECONDS + 0.5);
+        assert_eq!(session.poll_timeout(), RecognitionState::Candidate);
+        // More evidence arrives inside the extension window -> confirm.
+        session.started_at -= std::time::Duration::from_secs_f32(3.0);
+        let more: Vec<QueryFp> = (30..80)
+            .map(|i| QueryFp {
+                hash: 500 + i,
+                anchor_time: 10 + i,
+            })
+            .collect();
+        let state2 = session.ingest(more, &idx, &MatchParams::default());
+        assert_eq!(state2, RecognitionState::ConfidentMatch);
+    }
+
+    #[test]
+    fn weak_listening_session_dies_at_extension_deadline() {
+        // The flip side: a session that never becomes a live candidate is
+        // NOT extended — it dies on the original schedule.
+        let mut idx = InMemoryIndex::new();
+        idx.add_recording(RecordingId::new(0), &[(500, 100)]);
+        idx.finalize();
+        let mut session = RecognitionSession::new(22_050, 1024);
+        let trickle: Vec<QueryFp> = (0..4)
+            .map(|i| QueryFp {
+                hash: 500,
+                anchor_time: 10 + i,
+            })
+            .collect();
+        let state = session.ingest(trickle, &idx, &MatchParams::default());
+        assert_ne!(state, RecognitionState::Candidate);
+        session.started_at -= std::time::Duration::from_secs_f32(MAX_CAPTURE_SECONDS + 0.5);
+        assert_eq!(session.poll_timeout(), RecognitionState::NoMatch);
     }
 
     #[test]
