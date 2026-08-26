@@ -1,81 +1,136 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SIVANA — A Machine For Finding Sound</title>
-<link rel="stylesheet" href="/styles.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#e3e8e4" />
+  <title>Sivana — Live Audio Recognition</title>
+  <link rel="stylesheet" href="/styles.css?v=20260824-4" />
 </head>
 <body class="state-idle">
-  <canvas id="viz" aria-hidden="true"></canvas>
+  <div class="folio-rail" aria-hidden="true">
+    <span>SVN / AUDIO INDEX</span>
+    <span>VOL. 01</span>
+  </div>
 
   <header class="masthead">
-    <span class="brand">SIVANA</span>
-    <span class="issue">ENGINE A · LANDMARK · CATALOG <span id="catalog-version">—</span></span>
-    <nav class="mastnav">
-      <button class="navlink" id="toggle-archive">ARCHIVE</button>
-      <button class="navlink" id="toggle-notes">NOTES</button>
+    <a class="brand" href="/" aria-label="Sivana home">SIVANA<span class="brand-mark">/</span></a>
+    <p class="issue">
+      <span>Live recognition journal</span>
+      <span>Engine A · Catalog <b id="catalog-version">—</b></span>
+    </p>
+    <nav class="mastnav" aria-label="Utilities">
+      <a class="navlink navlink--add" href="/add.html" aria-label="Add to index">
+        <span class="navlink__long">Add to index</span><span class="navlink__plus" aria-hidden="true">＋</span>
+      </a>
+      <button class="navlink" id="toggle-archive" type="button" aria-controls="drawer-archive" aria-expanded="false">
+        Archive <span aria-hidden="true">↗</span>
+      </button>
+      <button class="navlink" id="toggle-notes" type="button" aria-controls="drawer-notes" aria-expanded="false">
+        System notes <span aria-hidden="true">↗</span>
+      </button>
     </nav>
   </header>
 
   <main class="stage">
-    <!-- IDLE -->
-    <section id="panel-hero" class="panel">
-      <p class="kicker">A MACHINE FOR FINDING SOUND</p>
-      <h1 class="headline">Hear&nbsp;it.<br /><em>Name&nbsp;it.</em></h1>
-      <button id="listen-btn" class="ring-btn" aria-label="Start listening">
-        <span class="ring-btn__dot"></span>LISTEN
-      </button>
-      <p class="sub">Recognition without uploading your raw audio.<br />Fingerprinted locally, in Rust.</p>
+    <div class="signal-field" aria-hidden="true">
+      <div class="signal-field__caption">
+        <span>Live spectral register</span>
+        <span>22.05 kHz / Local</span>
+      </div>
+      <canvas id="viz"></canvas>
+      <span class="signal-field__axis signal-field__axis--left">LOW</span>
+      <span class="signal-field__axis signal-field__axis--right">HIGH</span>
+    </div>
+
+    <section id="panel-hero" class="panel panel--hero">
+      <p class="kicker">Recognition, in real time</p>
+      <h1 class="headline"><span>What’s</span><em>playing</em><span>here?</span></h1>
+      <div class="hero-copy">
+        <p class="dek">Point Sivana at the room. The fingerprint is made on this device; the raw recording stays with you.</p>
+        <button id="listen-btn" class="listen-btn" type="button">
+          <span class="listen-btn__label">Start listening</span>
+          <span class="listen-btn__action" aria-hidden="true">MIC ON&nbsp;&nbsp;→</span>
+        </button>
+        <p class="privacy-note"><span aria-hidden="true">●</span> No audio upload. Fingerprints only.</p>
+      </div>
+      <p class="cover-note">A ruthless search engine<br />dressed like a music journal.</p>
     </section>
 
-    <!-- LISTENING -->
-    <section id="panel-listening" class="panel hidden" aria-live="polite">
-      <p class="kicker">WHAT ARE WE HEARING?</p>
-      <div class="bigread"><span id="fact-captured">0.00</span><small>s</small></div>
-      <button id="stop-btn" class="ghost-btn">■ STOP</button>
+    <section id="panel-listening" class="panel panel--listening hidden" aria-live="polite">
+      <div class="listening-heading">
+        <p class="kicker">Listening now</p>
+        <h2 class="listening-title">Finding the track.</h2>
+        <p class="listening-note">Sivana stops automatically after twelve seconds if there is no confident match.</p>
+      </div>
+      <div class="capture-clock" aria-label="Capture duration">
+        <small>Elapsed</small><span id="fact-captured">00:00</span>
+      </div>
+      <button id="stop-btn" class="text-action" type="button"><span aria-hidden="true">■</span> Stop listening</button>
     </section>
 
-    <!-- MATCHED -->
-    <section id="panel-result" class="panel hidden" aria-live="polite">
-      <p class="folio">FOUND</p>
-      <h2 class="result-title" id="result-title">—</h2>
-      <p class="result-artist" id="result-artist">—</p>
+    <section id="panel-result" class="panel panel--result hidden" aria-live="polite">
+      <div class="result-folio">
+        <span>FOUND</span>
+      </div>
+      <figure class="result-artwork" id="result-artwork">
+        <figcaption>Catalog record <span id="result-record-number">001</span></figcaption>
+        <img id="result-cover" alt="" />
+        <span class="result-artwork__placeholder" aria-hidden="true">SVN<br />AUDIO<br />INDEX</span>
+      </figure>
+      <div class="result-copy">
+        <p class="kicker">The record in the room</p>
+        <h2 class="result-title" id="result-title">—</h2>
+        <p class="result-artist" id="result-artist">—</p>
+      </div>
       <dl class="result-meta">
-        <div><dt>MATCHED AT</dt><dd id="result-offset">—</dd></div>
-        <div><dt>EVIDENCE</dt><dd id="result-confidence">—</dd></div>
-        <div><dt>RECOGNIZED IN</dt><dd id="result-latency">—</dd></div>
+        <div><dt>Position</dt><dd id="result-offset">—</dd></div>
+        <div><dt>Evidence</dt><dd id="result-confidence">—</dd></div>
+        <div><dt>Recognition time</dt><dd id="result-latency">—</dd></div>
       </dl>
-      <button id="again-btn" class="ghost-btn">LISTEN AGAIN</button>
+      <button id="again-btn" class="listen-btn listen-btn--compact" type="button">
+        <span class="listen-btn__label">Listen again</span>
+        <span class="listen-btn__action" aria-hidden="true">RESET&nbsp;&nbsp;→</span>
+      </button>
     </section>
 
-    <!-- NO MATCH -->
-    <section id="panel-nomatch" class="panel hidden" aria-live="polite">
-      <p class="folio">NOT FOUND</p>
-      <h2 class="headline headline--small">Not in the catalog — yet.</h2>
-      <button id="retry-btn" class="ghost-btn">TRY AGAIN</button>
+    <section id="panel-nomatch" class="panel panel--nomatch hidden" aria-live="polite">
+      <p class="kicker">Outside the current catalog</p>
+      <h2 class="no-match-title">Not found.<br /><em>Not silence.</em></h2>
+      <p class="dek">Try a clearer source or stay closer to the sound.</p>
+      <button id="retry-btn" class="listen-btn listen-btn--compact" type="button">
+        <span class="listen-btn__label">Try again</span>
+        <span class="listen-btn__action" aria-hidden="true">RESTART&nbsp;&nbsp;→</span>
+      </button>
     </section>
   </main>
 
-  <footer class="statusbar">
-    <span>SIGNAL <b id="fact-signal">—</b></span>
-    <span>LANDMARKS <b id="fact-landmarks">0</b></span>
-    <span>STATUS <b id="fact-status">IDLE</b></span>
-    <span class="statusbar__right">SIVANA / LOCAL FINGERPRINTS ONLY</span>
+  <footer class="statusbar" aria-label="Recognition status" aria-live="polite">
+    <div><span>Signal</span><b id="fact-signal">—</b></div>
+    <div><span>Landmarks</span><b id="fact-landmarks">0</b></div>
+    <div class="statusbar__state"><span>Status</span><b id="fact-status">IDLE</b></div>
+    <p>Browser fingerprinting / Rust + WASM</p>
   </footer>
 
-  <!-- Slide-over: archive -->
-  <aside id="drawer-archive" class="drawer" aria-label="Recognition archive">
-    <h3 class="drawer__title">ARCHIVE</h3>
+  <aside id="drawer-archive" class="drawer" aria-label="Recognition archive" aria-hidden="true">
+    <div class="drawer__head">
+      <p>Listening index</p>
+      <h2>Archive</h2>
+      <button class="drawer__close" type="button" data-close-drawer="drawer-archive" aria-label="Close archive">Close ×</button>
+    </div>
     <ol id="archive-list" class="archive-list"></ol>
+    <p class="drawer__empty" id="archive-empty">Recognized tracks will be filed here.</p>
   </aside>
 
-  <!-- Slide-over: diagnostics -->
-  <aside id="drawer-notes" class="drawer" aria-label="System notes">
-    <h3 class="drawer__title">SYSTEM NOTES</h3>
+  <aside id="drawer-notes" class="drawer" aria-label="System notes" aria-hidden="true">
+    <div class="drawer__head">
+      <p>Technical appendix</p>
+      <h2>System notes</h2>
+      <button class="drawer__close" type="button" data-close-drawer="drawer-notes" aria-label="Close system notes">Close ×</button>
+    </div>
     <pre id="colo-body" class="notes-body"></pre>
   </aside>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=20260824-4"></script>
 </body>
 </html>

@@ -136,6 +136,21 @@ pub struct MatchOutcome {
     /// carries a competitor's ratio; 1.0 when there is no next row). A
     /// calibration feature (§26).
     pub margin_over_next: f32,
+    /// Span of query anchor times contributing inlier votes to this
+    /// candidate, in frames (robustness contract: "matched query-time span").
+    /// Repetitive music concentrates evidence at one query moment; a real
+    /// capture spreads it across the whole window.
+    pub query_span_frames: u32,
+    /// Distinct query hashes among the inliers (robustness contract:
+    /// "unique aligned occurrences"). One hash repeating at many times
+    /// inflates `inliers` without adding identity; this counts what is
+    /// actually unique.
+    pub unique_aligned: usize,
+    /// Mean rarity weight over the inlier votes (the idf mean behind
+    /// `weighted_score`). Ubiquitous timbre hashes drag this toward the
+    /// epsilon floor even when raw counts look healthy; a calibrated model
+    /// can use that directly instead of inferring it from mass.
+    pub mean_rarity: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +196,10 @@ impl InMemoryIndex {
             bucket: i64,
             exact: i64,
             weight: f32,
+            /// Query-side provenance for the calibration features: which
+            /// hash voted, and where in the query timeline it sits.
+            hash: u32,
+            q_anchor: u32,
         }
         let mut votes: Vec<Vote> = Vec::with_capacity(query.len() * 8);
         let mut seen_hashes = std::collections::HashSet::new();
@@ -206,6 +225,8 @@ impl InMemoryIndex {
                         bucket: offset.div_euclid(width),
                         exact: offset,
                         weight: w,
+                        hash: q.hash,
+                        q_anchor: q.anchor_time,
                     });
                 }
             }
@@ -224,9 +245,14 @@ impl InMemoryIndex {
             total_weight: f32,
             votes: usize,
             offsets: BTreeMap<i64, (usize, f32)>, // exact offset -> (count, w)
+            /// Distinct contributing query hashes (calibration feature).
+            hashes: std::collections::HashSet<u32>,
+            /// Min/max query anchors among contributing votes (span).
+            q_min: u32,
+            q_max: u32,
         }
         let mut accs: Vec<((u32, i64), Acc)> = Vec::new();
-        for v in votes {
+        for v in &votes {
             match accs.last_mut() {
                 Some(((r, b), acc)) if *r == v.rec.as_u32() && *b == v.bucket => {
                     acc.total_weight += v.weight;
@@ -234,6 +260,9 @@ impl InMemoryIndex {
                     let e = acc.offsets.entry(v.exact).or_insert((0, 0.0));
                     e.0 += 1;
                     e.1 += v.weight;
+                    acc.hashes.insert(v.hash);
+                    acc.q_min = acc.q_min.min(v.q_anchor);
+                    acc.q_max = acc.q_max.max(v.q_anchor);
                 }
                 _ => {
                     let mut m = BTreeMap::new();
@@ -244,6 +273,9 @@ impl InMemoryIndex {
                             total_weight: v.weight,
                             votes: 1,
                             offsets: m,
+                            hashes: std::iter::once(v.hash).collect(),
+                            q_min: v.q_anchor,
+                            q_max: v.q_anchor,
                         },
                     ));
                 }
@@ -287,6 +319,9 @@ impl InMemoryIndex {
             offset: i64,
             inliers: usize,
             concentration: f32,
+            query_span_frames: u32,
+            unique_aligned: usize,
+            mean_rarity: f32,
         }
         let mut verified: Vec<Verified> = rows
             .into_iter()
@@ -308,18 +343,62 @@ impl InMemoryIndex {
                             .then_with(|| b.0.cmp(a.0))
                     })
                     .expect("accumulator non-empty");
+                // Second walk over the cell's votes collects calibration
+                // features from inliers only (votes were sorted by
+                // (rec, bucket), so this run is contiguous).
                 let mut inliers = 0usize;
                 let mut inlier_w = 0.0f32;
                 for (_off, (count, w)) in acc.offsets.range(best_off - tol..=best_off + tol) {
                     inliers += count;
                     inlier_w += w;
                 }
+                let mut inlier_hashes: std::collections::HashSet<u32> =
+                    std::collections::HashSet::new();
+                let mut q_min = u32::MAX;
+                let mut q_max = 0u32;
+                let mut rarity_sum = 0.0f32;
+                let vote_run = votes
+                    .as_slice()
+                    .binary_search_by(|v| (v.rec.as_u32(), v.bucket).cmp(&(rec_u32, bucket)))
+                    .map_or(&[][..], |i| {
+                        let mut lo = i;
+                        while lo > 0
+                            && votes[lo - 1].rec.as_u32() == rec_u32
+                            && votes[lo - 1].bucket == bucket
+                        {
+                            lo -= 1;
+                        }
+                        let mut hi = i;
+                        while hi < votes.len()
+                            && votes[hi].rec.as_u32() == rec_u32
+                            && votes[hi].bucket == bucket
+                        {
+                            hi += 1;
+                        }
+                        &votes[lo..hi]
+                    });
+                for v in vote_run {
+                    if (v.exact - best_off).abs() <= tol {
+                        inlier_hashes.insert(v.hash);
+                        q_min = q_min.min(v.q_anchor);
+                        q_max = q_max.max(v.q_anchor);
+                        rarity_sum += v.weight;
+                    }
+                }
+                let n_inlier_votes = rarity_sum.max(1e-9);
                 Verified {
                     rec: rec_u32,
                     score: weight,
                     offset: best_off,
                     inliers,
                     concentration: if weight > 0.0 { inlier_w / weight } else { 0.0 },
+                    query_span_frames: if inlier_hashes.is_empty() {
+                        0
+                    } else {
+                        q_max.saturating_sub(q_min)
+                    },
+                    unique_aligned: inlier_hashes.len(),
+                    mean_rarity: rarity_sum / n_inlier_votes,
                 }
             })
             .collect();
@@ -341,6 +420,9 @@ impl InMemoryIndex {
                 inliers: v.inliers,
                 offset_concentration: v.concentration,
                 offset_frames: v.offset,
+                query_span_frames: v.query_span_frames,
+                unique_aligned: v.unique_aligned,
+                mean_rarity: v.mean_rarity,
             })
             .collect()
     }
@@ -581,6 +663,59 @@ mod tests {
         assert_eq!(
             solo[0].margin_over_next, 1.0,
             "single candidate has no rival"
+        );
+    }
+
+    /// Calibration features (robustness contract item 2): the outcome must
+    /// distinguish "one hash repeated" from "many unique hashes spread over
+    /// the query timeline" — raw inlier counts cannot.
+    #[test]
+    fn calibration_features_measure_uniqueness_and_span() {
+        let mut idx = InMemoryIndex::new();
+        // Recording 0: five distinct hashes aligned at offset +100.
+        idx.add_recording(
+            RecordingId::new(0),
+            &[(1, 100), (2, 102), (3, 104), (4, 106), (5, 108)],
+        );
+        idx.finalize();
+
+        // Query: those five hashes at consecutive anchors -> all five are
+        // inliers spanning 8 frames of query time.
+        let q: Vec<QueryFp> = (0..5u32)
+            .map(|i| QueryFp {
+                hash: i + 1,
+                anchor_time: i * 2,
+            })
+            .collect();
+        let out = idx.query(&q, &MatchParams::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].unique_aligned, 5);
+        assert_eq!(out[0].query_span_frames, 8);
+        assert!(out[0].inliers >= 5);
+        assert!(
+            out[0].mean_rarity > 0.5,
+            "single-recording catalog keeps rarity above the epsilon floor: {}",
+            out[0].mean_rarity
+        );
+
+        // Now a degenerate case in a fresh index: ONE hash repeated at many
+        // query times. Inliers rise with every repetition; uniqueness must
+        // not.
+        let mut rep = InMemoryIndex::new();
+        rep.add_recording(RecordingId::new(1), &[(9, 500), (9, 600), (9, 700)]);
+        rep.add_recording(RecordingId::new(2), &[(9, 900)]);
+        rep.finalize();
+        let q_rep: Vec<QueryFp> = (0..4u32)
+            .map(|i| QueryFp {
+                hash: 9,
+                anchor_time: i,
+            })
+            .collect();
+        let out_rep = rep.query(&q_rep, &MatchParams::default());
+        let rec2 = out_rep.iter().find(|o| o.recording.as_u32() == 2).unwrap();
+        assert_eq!(
+            rec2.unique_aligned, 1,
+            "repeated hash must not inflate uniqueness"
         );
     }
 

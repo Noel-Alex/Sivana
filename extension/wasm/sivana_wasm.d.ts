@@ -5,11 +5,17 @@
 export class WasmFingerprinter {
   free(): void;
 /**
-* Create an engine for mono PCM at `sample_rate_hz` using default
-* V2 landmark parameters.
+* Create an engine for mono PCM at `sample_rate_hz` using the
+* production operating point (E4: 512 log bands — MUST match the
+* ingest configuration or hashes cannot collide).
 * @param {number} sample_rate_hz
 */
   constructor(sample_rate_hz: number);
+/**
+* Flush end-of-stream state; returns any trailing batch.
+* @returns {Uint8Array}
+*/
+  finish(): Uint8Array;
 /**
 * Push mono PCM; returns the SFP1 batch of fingerprints finalized
 * by this chunk (may be empty).
@@ -17,11 +23,6 @@ export class WasmFingerprinter {
 * @returns {Uint8Array}
 */
   process(pcm: Float32Array): Uint8Array;
-/**
-* Flush end-of-stream state; returns any trailing batch.
-* @returns {Uint8Array}
-*/
-  finish(): Uint8Array;
 /**
 * Human-readable engine identity for diagnostics panels.
 * @returns {string}
@@ -34,13 +35,13 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly __wbg_wasmfingerprinter_free: (a: number, b: number) => void;
+  readonly wasmfingerprinter_finish: (a: number, b: number) => void;
   readonly wasmfingerprinter_new: (a: number) => number;
   readonly wasmfingerprinter_process: (a: number, b: number, c: number, d: number) => void;
-  readonly wasmfingerprinter_finish: (a: number, b: number) => void;
   readonly wasmfingerprinter_version: (a: number, b: number) => void;
   readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
-  readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+  readonly __wbindgen_malloc: (a: number, b: number) => number;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

@@ -36,15 +36,21 @@ pub struct CatalogState {
     pub next_recording_id: u32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-struct RecordingMeta {
-    title: String,
-    artist: String,
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct RecordingMetadata {
+    pub title: String,
+    pub artist: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artwork_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_provider: Option<String>,
 }
 
 fn load_json<T>(path: &Path) -> Option<T>
 where
-    T: for<'a> serde::de::DeserializeOwned,
+    T: serde::de::DeserializeOwned,
 {
     std::fs::read(path)
         .ok()
@@ -64,6 +70,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
 
 pub struct IngestStats {
     pub added: Vec<u32>,
+    pub existing: Vec<u32>,
     pub skipped: usize,
     pub failed: Vec<(String, String)>,
     pub segment: Option<PathBuf>,
@@ -108,9 +115,26 @@ fn ingest_one(path: &Path, cfg: &LandmarkV2Config) -> Result<Ingested, String> {
 /// files become fingerprint sidecars plus postings in one new delta
 /// segment, followed by an atomic manifest swap.
 pub fn add_files(dir: &Path, files: &[PathBuf], jobs: usize) -> Result<IngestStats, String> {
+    let requests = files
+        .iter()
+        .cloned()
+        .map(|path| (path, None))
+        .collect::<Vec<_>>();
+    add_files_with_metadata(dir, &requests, jobs)
+}
+
+/// Ingest audio files while attaching authoritative external metadata.
+///
+/// Metadata is stored alongside the recording id in `recordings.json`. A
+/// duplicate source updates its metadata without rebuilding its fingerprints.
+pub fn add_files_with_metadata(
+    dir: &Path,
+    files: &[(PathBuf, Option<RecordingMetadata>)],
+    jobs: usize,
+) -> Result<IngestStats, String> {
     std::fs::create_dir_all(dir.join("fingerprints")).map_err(|e| e.to_string())?;
     let state: CatalogState = load_json(&dir.join("sources.json")).unwrap_or_default();
-    let mut metas: HashMap<String, RecordingMeta> =
+    let mut metas: HashMap<String, RecordingMetadata> =
         load_json(&dir.join("recordings.json")).unwrap_or_default();
     let sources = state.sources.clone();
 
@@ -124,34 +148,41 @@ pub fn add_files(dir: &Path, files: &[PathBuf], jobs: usize) -> Result<IngestSta
     let mut jobs_in = Vec::with_capacity(files.len());
     let mut stats = IngestStats {
         added: Vec::new(),
+        existing: Vec::new(),
         skipped: 0,
         failed: Vec::new(),
         segment: None,
         postings: 0,
     };
-    for path in files {
+    for (path, metadata) in files {
         match hash_file(path) {
             Ok(h) if state.sources.contains_key(&h) => {
+                let rec_id = state.sources[&h];
                 stats.skipped += 1;
+                stats.existing.push(rec_id);
+                if let Some(metadata) = metadata {
+                    metas.insert(rec_id.to_string(), metadata.clone());
+                }
             }
-            Ok(_) => jobs_in.push(path.clone()),
+            Ok(_) => jobs_in.push((path.clone(), metadata.clone())),
             Err(e) => stats.failed.push((path.display().to_string(), e)),
         }
     }
 
-    let results: Vec<(PathBuf, Result<Ingested, String>)> = rayon::ThreadPoolBuilder::new()
-        .num_threads(jobs.max(1))
-        .build()
-        .map_err(|e| e.to_string())?
-        .install(|| {
-            jobs_in
-                .par_iter()
-                .map(|path| {
-                    let r = ingest_one(path, &cfg);
-                    (path.clone(), r)
-                })
-                .collect()
-        });
+    let results: Vec<(PathBuf, Option<RecordingMetadata>, Result<Ingested, String>)> =
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(jobs.max(1))
+            .build()
+            .map_err(|e| e.to_string())?
+            .install(|| {
+                jobs_in
+                    .par_iter()
+                    .map(|(path, metadata)| {
+                        let r = ingest_one(path, &cfg);
+                        (path.clone(), metadata.clone(), r)
+                    })
+                    .collect()
+            });
 
     let mut builder = sivana_index::segment::SegmentBuilder::new();
     let mut new_state = CatalogState {
@@ -159,7 +190,7 @@ pub fn add_files(dir: &Path, files: &[PathBuf], jobs: usize) -> Result<IngestSta
         next_recording_id: state.next_recording_id,
     };
 
-    for (path, result) in results {
+    for (path, metadata, result) in results {
         match result {
             Ok(ing) => {
                 if new_state.sources.contains_key(&ing.hash) {
@@ -171,10 +202,13 @@ pub fn add_files(dir: &Path, files: &[PathBuf], jobs: usize) -> Result<IngestSta
                 new_state.sources.insert(ing.hash.clone(), rec_id);
                 metas.insert(
                     rec_id.to_string(),
-                    RecordingMeta {
+                    metadata.unwrap_or(RecordingMetadata {
                         title: ing.title,
-                        artist: "unknown".into(),
-                    },
+                        artist: "Unknown artist".into(),
+                        artwork_url: None,
+                        source_url: None,
+                        source_provider: None,
+                    }),
                 );
                 let mut batch = Vec::new();
                 encode_batch(&ing.fps, TARGET_SAMPLE_RATE, &mut batch);
@@ -417,5 +451,38 @@ mod tests {
             Some(1),
             "ingested catalog must identify song 1"
         );
+    }
+
+    #[test]
+    fn linked_metadata_is_persisted_and_updates_duplicates() {
+        let corpus = temp_dir("metadata-corpus");
+        let catalog = temp_dir("metadata-catalog");
+        let file = make_wav_corpus(&corpus, 1).remove(0);
+        let metadata = RecordingMetadata {
+            title: "A Track".into(),
+            artist: "An Artist".into(),
+            artwork_url: Some("https://i.ytimg.com/cover.jpg".into()),
+            source_url: Some("https://music.youtube.com/watch?v=abc123".into()),
+            source_provider: Some("YouTube Music".into()),
+        };
+
+        let first = add_files_with_metadata(&catalog, &[(file.clone(), Some(metadata.clone()))], 1)
+            .unwrap();
+        assert_eq!(first.added, vec![0]);
+        let saved: HashMap<String, RecordingMetadata> =
+            load_json(&catalog.join("recordings.json")).unwrap();
+        assert_eq!(saved.get("0"), Some(&metadata));
+
+        let updated = RecordingMetadata {
+            title: "A Track (Official Audio)".into(),
+            ..metadata
+        };
+        let duplicate =
+            add_files_with_metadata(&catalog, &[(file, Some(updated.clone()))], 1).unwrap();
+        assert_eq!(duplicate.added.len(), 0);
+        assert_eq!(duplicate.existing, vec![0]);
+        let saved: HashMap<String, RecordingMetadata> =
+            load_json(&catalog.join("recordings.json")).unwrap();
+        assert_eq!(saved.get("0"), Some(&updated));
     }
 }

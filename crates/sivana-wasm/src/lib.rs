@@ -208,7 +208,10 @@ mod tests {
         );
         // Digest observed on this workspace build; bump ONLY with a
         // fingerprint-version bump and an EXPERIMENTS.md entry.
-        assert_eq!(h, 0xC4A5_91E4, "golden digest drifted");
+        // 0xC4A5_91E4 = pre-E12 engine. 0xA449_337C = E12 minimum-
+        // statistics whitening + relative dust guard
+        // (research/EXPERIMENTS.md E12/E13).
+        assert_eq!(h, 0xA449_337C, "golden digest drifted");
     }
 
     #[test]

@@ -107,6 +107,17 @@ enum Command {
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
+    /// E9: B1 discriminativity levers (df-weighting, band quantization).
+    E9 {
+        #[arg(long, default_value_t = 12)]
+        tracks: usize,
+        #[arg(long, default_value_t = 20.0)]
+        seconds: f32,
+        #[arg(long, default_value_t = 22_050)]
+        sample_rate: u32,
+        #[arg(long, default_value_t = 2026)]
+        seed: u64,
+    },
 }
 
 fn parse_list(s: &str) -> Vec<f32> {
@@ -264,6 +275,31 @@ fn main() -> Result<(), String> {
                 markdown.display()
             );
             println!("wall time: {:.1}s", started.elapsed().as_secs_f64());
+            Ok(())
+        }
+        Command::E9 {
+            tracks,
+            seconds,
+            sample_rate,
+            seed,
+        } => {
+            let results = runner::run_e9_b1_levers(tracks, seconds, sample_rate, seed)
+                .map_err(|e| format!("E9 run failed: {e}"))?;
+            println!(
+                "{:^18} | {:>8} | {:>6} | {:>8} | {:>8}",
+                "variant", "recall", "FA", "maxRej", "medMatch"
+            );
+            for v in &results {
+                println!(
+                    "{:^18} | {:>7.1}% | {}/{} | {:>8} | {:>8.0}",
+                    v.name,
+                    v.recall_track * 100.0,
+                    v.false_accepts_210,
+                    v.rejection_cases,
+                    v.max_rejection_inliers,
+                    v.median_match_inliers
+                );
+            }
             Ok(())
         }
         Command::Calibrate {

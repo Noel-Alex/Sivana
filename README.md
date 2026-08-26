@@ -4,23 +4,27 @@ A Rust-native audio recognition system: streaming fingerprints, a custom
 memory-mapped search index, a browser/WASM engine, and an editorial web
 product on top. Design document: [research/PLAN.md](research/PLAN.md).
 
-## Status — all phases implemented (0–10)
+## Status
 
-| phase | scope | where |
-|---|---|---|
-| 0 benchmark platform | degradation grid, legacy control, one-command reports | `crates/sivana-bench` |
-| 1 landmark engine v2 | streaming STFT → adaptive peaks → scored landmarks | `sivana-dsp`, `sivana-landmark` |
-| 2 matcher v2 | rarity weights, offset tolerance, calibrated zero-FA gate (E4) | `sivana-match` |
-| 3 production index | LMDB backend + custom `.siv` mmap segments, atomic manifests | `sivana-index`, [index-format/SPEC.md](index-format/SPEC.md) |
-| 4 wasm engine | same core compiled to wasm32, SFP1 wire format | `sivana-wasm` |
-| 5 production website | Axum API + streaming recognition + editorial UI | `sivana-api`, `apps/web` |
-| 6 catalog platform | parallel idempotent ingest, delta segments, compaction | `sivana-ingest` |
-| 7 scale-invariant engine | B1 triplets + affine verification; measured, not promoted (E5) | `sivana-invariant` |
-| 8 neural evaluation | decision record with trigger criteria | [research/NEURAL-EVAL.md](research/NEURAL-EVAL.md) |
-| 9 chrome extension | MV3 tabCapture → offscreen, reuses the same engine | `extension/` |
-| 10 scale-out | hot catalog swap, load generator, deployment guide | `docs/DEPLOY.md` |
+Phases 0–6 and 10 are implemented and measured. Phases 7–9 are partial or
+deferred — by recorded decision, not omission:
+
+| phase | scope | where | status |
+|---|---|---|---|
+| 0 benchmark platform | degradation grid, legacy control, one-command reports | `crates/sivana-bench` | done |
+| 1 landmark engine v2 | streaming STFT → adaptive peaks → scored landmarks | `sivana-dsp`, `sivana-landmark` | done |
+| 2 matcher v2 | rarity weights, offset tolerance, calibrated zero-FA gate (E4) | `sivana-match` | done; calibration work continues per [research/PRODUCTION-ROBUSTNESS.md](research/PRODUCTION-ROBUSTNESS.md) |
+| 3 production index | LMDB backend + custom `.siv` mmap segments, atomic manifests | `sivana-index`, [index-format/SPEC.md](index-format/SPEC.md) | done at dev scale; large-catalog p99 unmeasured |
+| 4 wasm engine | same core compiled to wasm32, SFP1 wire format | `sivana-wasm` | done; WASM SIMD not attempted |
+| 5 production website | Axum API + streaming recognition + editorial UI | `sivana-api`, `apps/web` | done |
+| 6 catalog platform | parallel idempotent ingest, delta segments, compaction | `sivana-ingest` | done |
+| 7 scale-invariant engine | B1 triplets + affine verification; measured, **not promoted** (E5), levers exhausted and phase **closed** (E9) | `sivana-invariant` | closed by evidence: wrong-audio evidence exceeds true-match evidence on every tested configuration; speed/pitch coverage is a documented gap (see E9) |
+| 8 neural evaluation | evaluation-only; deferred with re-entry triggers T1–T3 | [research/NEURAL-EVAL.md](research/NEURAL-EVAL.md) | deferred by design (E6) |
+| 9 chrome extension | MV3 tabCapture → offscreen, reuses the same engine | `extension/` | functional gaps being closed |
+| 10 scale-out | hot catalog swap, load generator, deployment guide | `docs/DEPLOY.md` | done for single-region |
 
 Experiment log with every measured decision: [research/EXPERIMENTS.md](research/EXPERIMENTS.md).
+Where EXPERIMENTS.md and PRODUCTION-ROBUSTNESS.md disagree, the latter wins.
 
 ## Quick start
 
@@ -41,6 +45,23 @@ cargo run -p sivana-api  --release -- --catalog /tmp/catalog --web apps/web
 
 The browser fingerprints locally (wasm); only compact fingerprint batches
 cross the network. Raw audio never leaves the page.
+
+### API hardening flags
+
+`POST /v1/recordings` (catalog ingestion) accepts an optional shared secret:
+
+```bash
+cargo run -p sivana-api --release -- --ingest-token "pick-a-long-secret"
+# then authenticate with either:
+curl -X POST http://127.0.0.1:8077/v1/recordings \
+  -H "Authorization: Bearer pick-a-long-secret" -F source_url=... -F audio=@track.flac
+# or, from the browser form (multipart), add a `token` field with the same secret.
+```
+
+Without `--ingest-token` ingestion is open (fine for localhost) and the server
+prints `ingest endpoint open (no --ingest-token set)` at startup. Session
+creation is additionally bounded per client IP to 30 sessions/minute, and the
+server serves at most 32 concurrent recognition sessions at a time.
 
 ## Workspace
 

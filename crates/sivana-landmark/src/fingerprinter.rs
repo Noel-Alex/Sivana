@@ -48,10 +48,38 @@ pub struct LandmarkV2Config {
 
 impl Default for LandmarkV2Config {
     fn default() -> Self {
+        // Minimum-statistics background suppression (E12): real microphone
+        // queries carry stationary energy — MEMS self-noise, laptop fan
+        // harmonics, mains buzz — whose spectral wiggles clear the
+        // per-frame median prominence test just as readily as music does
+        // (measured: pure room tone emitted 1084 fingerprints/s vs 1117
+        // for the actual song, and banked up to 50 aligned inliers against
+        // a repetitive synth catalog — MORE than the true far-field
+        // capture's 34). Each peak must therefore exceed its own bin's
+        // floor-of-the-trailing-window: stationary content never dips, so
+        // it stays pinned at the floor and is rejected; music constantly
+        // varies below its peaks (decays, vibrato, note changes), so
+        // sustained tones survive — unlike an EMA background, which a fast
+        // rise-tau taught to swallow any note longer than the tau
+        // (measured: zero fingerprints from a real music window). Window
+        // of ~86 frames ≈ 4 s at hop 1024/22.05 kHz; margin 6 dB is half
+        // the local-prominence gate. BOTH sides of the comparison run
+        // this pipeline (ingest + query), so hashes stay consistent.
+        let peaks = sivana_dsp::peaks_v2::PeaksV2Config {
+            background_min_window_frames: 86,
+            background_margin_db: 6.0,
+            // Spectral dust guard: sidelobe/rounding bins wobble with STFT
+            // phase advance and evade temporal floors (measured: a pure
+            // steady sine kept emitting thousands of landmarks from
+            // f1 485-511 dust bins). Real musical peaks sit within ~35 dB
+            // of their frame maximum; dust sits 60+ dB down.
+            relative_floor_db: 35.0,
+            ..Default::default()
+        };
         Self {
             fft_window: 2048,
             hop: 1024,
-            peaks: sivana_dsp::peaks_v2::PeaksV2Config::default(),
+            peaks,
             fanout: 8,
             dt_min: 1,
             dt_max: 50,
@@ -325,21 +353,55 @@ mod tests {
     use super::*;
 
     fn tone_pair(sr: u32) -> Vec<f32> {
-        let n = sr as usize * 4;
+        // E12 revision: a NOTE SEQUENCE — each note's onset is a real
+        // spectral swing that clears the minimum-statistics floors.
+        // (Shallow AM does NOT: its whole spectrum wobbles together and
+        // the trailing floor tracks it, which is correct behavior.)
+        let notes = [1000.0f32, 1250.0, 1500.0, 2000.0];
+        let note_len = (sr as usize * 3) / 4; // 750 ms per note, looping
+        let n = sr as usize * 12; // long enough to clear the ~4 s window
         (0..n)
             .map(|i| {
-                let t = i as f32 / sr as f32;
-                0.5 * (std::f32::consts::TAU * 1000.0 * t).sin()
-                    + 0.3 * (std::f32::consts::TAU * 3000.0 * t).sin()
+                let f = notes[(i / note_len) % notes.len()];
+                let into_note = i % note_len;
+                // 60 ms fade at each edge keeps onsets crisp but finite.
+                let env = ((into_note.min(note_len - into_note) as f32 / (0.06 * sr as f32))
+                    .min(1.0))
+                .sqrt();
+                0.5 * env * (std::f32::consts::TAU * f * i as f32 / sr as f32).sin()
             })
             .collect()
     }
 
     #[test]
     fn produces_fingerprints_for_tonal_audio() {
+        // Looping note sequence: genuinely non-stationary, must keep
+        // producing landmarks indefinitely.
         let fps = fingerprint(&tone_pair(22_050), 22_050, &LandmarkV2Config::default());
         assert!(!fps.is_empty());
         assert!(fps.len() > 50);
+    }
+
+    #[test]
+    fn stationary_tones_are_rejected_after_adaptation() {
+        // The E12 anti-goal: pure sustained sines carry no identity. The
+        // relative ceiling floor kills their sidelobe dust and the trailing
+        // minimum pins the carriers — after the window settles, zero
+        // emission. (With rel=0 this fixture leaked thousands of anchors.)
+        let n = 22_050usize * 14;
+        let steady: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / 22_050.0;
+                0.5 * (std::f32::consts::TAU * 1000.0 * t).sin()
+                    + 0.3 * (std::f32::consts::TAU * 3000.0 * t).sin()
+            })
+            .collect();
+        let fps = fingerprint(&steady, 22_050, &LandmarkV2Config::default());
+        let late = fps.iter().filter(|f| f.anchor_time >= 130).count();
+        assert_eq!(
+            late, 0,
+            "steady-state stationary tone must yield zero landmarks, got {late}"
+        );
     }
 
     #[test]

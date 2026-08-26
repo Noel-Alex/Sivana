@@ -48,18 +48,48 @@ pub struct PeaksV2Config {
     pub absolute_floor: f32,
     /// Keep at most this many peaks per frame (density control §9.3).
     pub max_peaks_per_frame: usize,
+    /// Temporal background suppression (E12, minimum-statistics form): a
+    /// candidate must exceed its OWN BIN's estimated noise floor — the
+    /// MINIMUM level that bin touched over a trailing window — by
+    /// [`Self::background_margin_db`] to be a peak. Minimum statistics is
+    /// the right tracker here because music VARIES (every vibrato, decay,
+    /// or note change dips far below its own running mean, constantly
+    /// refreshing the floor), so sustained tones survive; only truly
+    /// stationary content (fan hum, mains buzz, mic hiss) never dips, so
+    /// only it stays pinned at the floor and is rejected. This is what an
+    /// EMA-based background got wrong: rise-tau fast enough to track
+    /// capture start also absorbed any note longer than the tau, emitting
+    /// ZERO fingerprints from real music windows (measured). Window length
+    /// in FRAMES; 0 disables.
+    pub background_min_window_frames: usize,
+    /// Required margin over the per-bin minimum-statistics floor (dB).
+    pub background_margin_db: f32,
+    /// Frame-relative ceiling floor (E12b): a candidate must lie within
+    /// this many dB of the frame's STRONGEST bin. Kills spectral dust —
+    /// FFT far-sidelobes and float-rounding bins whose magnitudes wobble
+    /// tens of dB between frames (phase advance makes the wobble
+    /// deterministic, so minimum-statistics floors cannot pin them) —
+    /// while remaining gain-invariant. Real musical peaks sit well inside
+    /// 35 dB of their frame maximum; dust sits 60+ dB down. 0 disables.
+    pub relative_floor_db: f32,
 }
 
 impl Default for PeaksV2Config {
     fn default() -> Self {
         // First-cut V2 defaults; every value here must eventually be
-        // justified by a benchmark sweep (PLAN.md §92).
+        // justified by a benchmark sweep (PLAN.md §92). Whitening is OFF at
+        // this layer: the pure-detector semantics (oracle property tests,
+        // benchmarks) stay untouched. Production enables it via
+        // LandmarkV2Config::default().
         Self {
             time_radius: 2,
             freq_radius: 5,
             min_prominence_db: 8.0,
             absolute_floor: f32::NEG_INFINITY,
             max_peaks_per_frame: 8,
+            background_min_window_frames: 0,
+            background_margin_db: 0.0,
+            relative_floor_db: 0.0,
         }
     }
 }
@@ -100,6 +130,16 @@ pub struct PeakStreamer {
     fmap_ring: std::collections::VecDeque<Vec<f32>>,
     mag_ring: std::collections::VecDeque<Vec<f32>>,
     floor_ring: std::collections::VecDeque<f32>,
+    /// Per-frame maximum bin level in dB (E12b relative floor).
+    max_ring: std::collections::VecDeque<f32>,
+    /// Raw per-bin levels in dB over the trailing whitening window (E12),
+    /// from which the minimum-statistics floor is computed lazily in
+    /// decide() for candidate bins only. Length is bounded by
+    /// `background_min_window_frames`; None when disabled. Because the
+    /// window trails the decided frame's own instant, a frame decided
+    /// `time_radius` frames later reads exactly the history its instant
+    /// produced — streaming == batch by construction.
+    db_history: Option<std::collections::VecDeque<Vec<f32>>>,
     // Scratch (reused, never retained between calls).
     fmap_scratch: Vec<f32>,
     sel_scratch: Vec<f32>,
@@ -107,10 +147,16 @@ pub struct PeakStreamer {
     max_scratch: crate::sliding_max::SlidingMaxScratch,
 }
 
+/// Whitening enabled = window > 0. One place for the invariant.
+fn cfg_whitened(cfg: &PeaksV2Config) -> bool {
+    cfg.background_min_window_frames > 0
+}
+
 impl PeakStreamer {
     /// Create a streamer for spectra of `f_len` bins (window/2+1). Pass 0
     /// to size lazily from the first frame.
     pub fn new(f_len: usize, cfg: PeaksV2Config) -> Self {
+        let whitened = cfg_whitened(&cfg);
         Self {
             cfg,
             f_len,
@@ -120,6 +166,12 @@ impl PeakStreamer {
             fmap_ring: std::collections::VecDeque::new(),
             mag_ring: std::collections::VecDeque::new(),
             floor_ring: std::collections::VecDeque::new(),
+            max_ring: std::collections::VecDeque::new(),
+            db_history: if whitened {
+                Some(std::collections::VecDeque::new())
+            } else {
+                None
+            },
             fmap_scratch: Vec::new(),
             sel_scratch: Vec::new(),
             cand_scratch: Vec::new(),
@@ -157,6 +209,24 @@ impl PeakStreamer {
         self.fmap_ring.push_back(self.fmap_scratch.clone());
         self.mag_ring.push_back(mags.to_vec());
         self.floor_ring.push_back(floor);
+        // Frame maximum for the relative floor (E12b). One linear scan.
+        let frame_max_db = mags
+            .iter()
+            .fold(f32::NEG_INFINITY, |acc, &m| acc.max(to_db(m)));
+        self.max_ring.push_back(frame_max_db);
+
+        // Minimum-statistics floor (E12): store this frame's per-bin dB
+        // row; the trailing-window minimum is computed LAZILY in decide()
+        // for the few bins that pass the local-max prefilter (~20/frame),
+        // not eagerly for all 1025 bins. Identical results, ~50x less work.
+        if let Some(hist) = &mut self.db_history {
+            hist.push_back(mags.iter().map(|&m| to_db(m)).collect::<Vec<f32>>());
+            let w = self.cfg.background_min_window_frames;
+            while hist.len() > w {
+                hist.pop_front();
+            }
+        }
+
         self.fed += 1;
 
         // Decide everything whose time-radius lookahead has arrived.
@@ -187,6 +257,7 @@ impl PeakStreamer {
         let lo = base.saturating_sub(r);
         let hi = (base + r).min(filled - 1);
         let floor = self.floor_ring[base];
+        let frame_max = self.max_ring[base];
 
         self.cand_scratch.clear();
         for b in 0..self.f_len {
@@ -211,6 +282,32 @@ impl PeakStreamer {
             let db = to_db(m);
             if db < self.cfg.absolute_floor {
                 continue;
+            }
+            // Relative ceiling floor (E12b): reject spectral dust —
+            // sidelobe/rounding bins that sit tens of dB below their
+            // frame's strongest bin yet wobble enough to evade any
+            // temporal floor. Gain-invariant by construction.
+            if self.cfg.relative_floor_db > 0.0 && frame_max - db > self.cfg.relative_floor_db {
+                continue;
+            }
+            // Minimum-statistics background test (E12): the cell must rise
+            // above its OWN BIN's floor-of-the-trailing-window. Stationary
+            // content never dips, so it sits AT the floor and is rejected;
+            // music constantly varies below any of its peaks, refreshing
+            // the floor so sustained tones survive. Computed lazily for
+            // this bin only — the local-max prefilter already cut ~98% of
+            // cells, so this costs a few dozen window scans per frame.
+            if let Some(hist) = &self.db_history {
+                let mut bg = f32::INFINITY;
+                for row in hist.iter() {
+                    let v = row[b];
+                    if v < bg {
+                        bg = v;
+                    }
+                }
+                if db - bg < self.cfg.background_margin_db {
+                    continue;
+                }
             }
             let prominence = db - floor;
             if prominence < self.cfg.min_prominence_db {
@@ -245,6 +342,7 @@ impl PeakStreamer {
             self.fmap_ring.pop_front();
             self.mag_ring.pop_front();
             self.floor_ring.pop_front();
+            self.max_ring.pop_front();
             self.oldest += 1;
         }
     }

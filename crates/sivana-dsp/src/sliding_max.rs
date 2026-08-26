@@ -95,7 +95,7 @@ fn sliding_max_centered_scratch(
     if n == 0 {
         return;
     }
-    let w = radius.max(0) + 1;
+    let w = radius + 1;
     out.resize(n, f32::NEG_INFINITY);
 
     // Forward pass: out[i] = max input[max(0, i-w+1)..=i].

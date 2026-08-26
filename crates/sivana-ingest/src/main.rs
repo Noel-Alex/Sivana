@@ -80,10 +80,10 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             let p = e.path();
             if p.is_dir() {
                 walk(&p, out);
-            } else if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                if AUDIO_EXTS.contains(&ext.to_ascii_lowercase().as_str()) {
-                    out.push(p);
-                }
+            } else if let Some(ext) = p.extension().and_then(|e| e.to_str())
+                && AUDIO_EXTS.contains(&ext.to_ascii_lowercase().as_str())
+            {
+                out.push(p);
             }
         }
     }
@@ -167,7 +167,7 @@ fn main() -> Result<(), String> {
                 interval
             );
             loop {
-                let files = collect_files(&[inbox.clone()]);
+                let files = collect_files(std::slice::from_ref(&inbox));
                 let files: Vec<PathBuf> = files
                     .into_iter()
                     .filter(|p| {

@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Capture Diagnostics</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #0f1113;
+    color: #d6dbdf;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+    font-size: 14px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 18px 40px; }
+  h1 {
+    font-size: 14px; letter-spacing: .18em; text-transform: uppercase;
+    color: #8fd3a8; margin: 0 0 4px; font-weight: 600;
+  }
+  .sub { color: #78828a; font-size: 12px; margin: 0 0 18px; line-height: 1.5; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+  .btn {
+    appearance: none; cursor: pointer; border-radius: 6px;
+    font: inherit; font-size: 13px; letter-spacing: .04em;
+    padding: 9px 18px; border: 1px solid #2f4a3c;
+    background: #16211b; color: #9fe0bb;
+  }
+  .btn:hover:not(:disabled) { background: #1d2b24; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.secondary { border-color: #33373c; background: #17191c; color: #aab4bc; }
+  .btn.secondary:hover:not(:disabled) { background: #1d2023; }
+  .tiles {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px; margin-bottom: 18px;
+  }
+  .tile {
+    background: #16181b; border: 1px solid #23262a; border-radius: 6px;
+    padding: 10px 12px; min-width: 0;
+  }
+  .tile .k {
+    font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: #78828a; margin-bottom: 5px;
+  }
+  .tile .v {
+    font-size: 14px; font-weight: 600; color: #e8edf0;
+    word-break: break-word; overflow-wrap: anywhere;
+  }
+  .badge {
+    display: inline-block; margin-top: 6px; padding: 1px 9px;
+    border-radius: 999px; font-size: 11px; letter-spacing: .08em;
+    background: #33373c; color: #aab4bc;
+  }
+  .badge.pass { background: #14351f; color: #63d68b; }
+  .badge.check { background: #3a2f14; color: #e8b45a; }
+  .v.red { color: #ff6b5e; }
+  .v.amber { color: #e8b45a; }
+  .v.green { color: #63d68b; }
+  #log {
+    background: #0b0d0f; border: 1px solid #23262a; border-radius: 6px;
+    padding: 12px 14px; height: 46vh; overflow-y: auto;
+    font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+    word-break: break-word; overflow-wrap: anywhere; margin: 0;
+  }
+  .hint { color: #66707a; font-size: 11px; margin-top: 12px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Sivana Capture Diagnostics</h1>
+  <p class="sub">
+    Live-microphone telemetry for support. Mirrors the production capture path exactly.
+    Raw audio never leaves this page; only anonymous SFP1 fingerprint batches are sent to the local service.
+    Run this while any audio plays near the microphone, then press Copy log and paste the result back.
+  </p>
+
+  <div class="row">
+    <button class="btn" id="btn-start">Start diagnostics</button>
+    <button class="btn secondary" id="btn-copy">Copy log</button>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Sample-rate chain</div><div class="v" id="sum-chain">-</div></div>
+    <div class="tile"><div class="k">Processing (EC / NS / AGC)</div><div class="v" id="sum-constraints">-</div></div>
+    <div class="tile"><div class="k">Input level (RMS)</div><div class="v" id="sum-rms">-</div></div>
+    <div class="tile"><div class="k">Peak hold</div><div class="v" id="sum-peak">-</div></div>
+    <div class="tile">
+      <div class="k">Fingerprint throughput</div><div class="v" id="sum-throughput">-</div>
+      <span class="badge" id="sum-badge">IDLE</span>
+    </div>
+    <div class="tile"><div class="k">Session HTTP</div><div class="v" id="sum-http">-</div></div>
+    <div class="tile"><div class="k">Last WS event</div><div class="v" id="sum-ws">-</div></div>
+    <div class="tile"><div class="k">Engine</div><div class="v" id="sum-engine">-</div></div>
+  </div>
+
+  <pre id="log"></pre>
+  <p class="hint">
+    Healthy run: processing toggles OFF/OFF/OFF, sustained input above -40 dBFS,
+    fingerprint rate at or above 10 fps/s (PASS), HTTP 200 on session creation,
+    and a clean no_match (or matched) terminal websocket event.
+  </p>
+</div>
+
+<script>
+"use strict";
+
+// ---- Production constants and helpers, mirrored from apps/web/app.js ----
+
+var FINGERPRINT_SAMPLE_RATE = 22050;
+var ROUND_TRIP_LIMIT_MS = 12000;
+var METER_WINDOW_MS = 8000;
+var METER_INTERVAL_MS = 250;
+
+// app.js line 222, verbatim: the app's own capture constraints.
+var APP_AUDIO = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+// Spec'd relaxed comparison set (currently identical to the app's own set).
+var RELAXED_AUDIO = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+
+// app.js lines 18-42, verbatim.
+class StreamingLinearResampler {
+  constructor(inputRate, outputRate) {
+    this.step = inputRate / outputRate;
+    this.position = 0;
+    this.pending = new Float32Array(0);
+  }
+
+  process(input) {
+    if (this.step === 1 && this.pending.length === 0) return input;
+    const data = new Float32Array(this.pending.length + input.length);
+    data.set(this.pending);
+    data.set(input, this.pending.length);
+    const output = [];
+    while (this.position + 1 < data.length) {
+      const i = Math.floor(this.position);
+      const fraction = this.position - i;
+      output.push(data[i] + (data[i + 1] - data[i]) * fraction);
+      this.position += this.step;
+    }
+    const consumed = Math.floor(this.position);
+    this.pending = data.slice(consumed);
+    this.position -= consumed;
+    return Float32Array.from(output);
+  }
+}
+
+// ---- Logging and UI plumbing ----
+
+var $ = function (id) { return document.getElementById(id); };
+
+function ts() {
+  var d = new Date();
+  return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
+function log(line) {
+  var pre = $("log");
+  pre.textContent += "[" + ts() + "] " + line + "\n";
+  pre.scrollTop = pre.scrollHeight;
+}
+
+function banner(title) {
+  log("");
+  log("==================================================");
+  log("  " + title);
+  log("==================================================");
+}
+
+function reportErr(where, e) {
+  var name = e && e.name ? e.name : "Error";
+  var msg = e && e.message ? e.message : String(e);
+  log("[ERROR] " + where + ": " + name + ": " + msg);
+  if (e && e.stack) log("[ERROR] stack: " + String(e.stack).split("\n").slice(0, 4).join(" | "));
+}
+
+var state = {
+  running: false,
+  chosenStream: null,
+  chosenLabel: "",
+  probeCtx: null,
+  ctx: null,
+  engine: null,
+  resampler: null,
+  node: null,
+  src: null,
+  ws: null,
+  rtTimer: null,
+  sessionHttpStatus: null,
+  lastWsEvent: null,
+  // metering
+  sumSq: 0, samples: 0, peakLin: 0,
+  meterTimer: null, meterStart: 0, meterArmed: false,
+  lastWholeSecond: -1,
+  rmsDbfs: null, peakDbfs: null,
+  // throughput
+  batches: 0, fpCount: 0, fpBytes: 0,
+  tpWinStart: null,
+  headerLogged: false,
+};
+
+// ---- Summary tile helpers ----
+
+function setText(id, text) { $(id).textContent = text; }
+
+function colorize(el, dbfs) {
+  el.classList.remove("red", "amber", "green");
+  if (dbfs === null || isNaN(dbfs)) return;
+  if (dbfs < -40) el.classList.add("red");
+  else if (dbfs <= -20) el.classList.add("amber");
+  else el.classList.add("green");
+}
+
+function setBadge(kind, text) {
+  var b = $("sum-badge");
+  b.classList.remove("pass", "check");
+  if (kind === "pass") b.classList.add("pass");
+  if (kind === "check") b.classList.add("check");
+  b.textContent = text;
+}
+
+function fmtDb(dbfs) {
+  if (dbfs === null || isNaN(dbfs)) return "-";
+  return dbfs.toFixed(1) + " dBFS";
+}
+
+function updateChain(trackSr) {
+  var ctxSr = state.ctx ? state.ctx.sampleRate : null;
+  var parts = [];
+  parts.push("track " + (trackSr != null ? trackSr + " Hz" : "?"));
+  parts.push("ctx " + (ctxSr != null ? ctxSr + " Hz" : "?"));
+  var step = state.resampler ? state.resampler.step : null;
+  parts.push("fp " + FINGERPRINT_SAMPLE_RATE + " Hz");
+  if (step != null && Math.abs(step - 1) > 1e-9) parts.push("(resample x" + step.toFixed(3) + ")");
+  setText("sum-chain", parts.join(" -> "));
+}
+
+function updateConstraints(settings) {
+  if (!settings) { setText("sum-constraints", "-"); return; }
+  var f = function (v) { return v === undefined ? "n/a" : (v ? "ON" : "OFF"); };
+  setText("sum-constraints",
+    "EC " + f(settings.echoCancellation) + " / NS " + f(settings.noiseSuppression) +
+    " / AGC " + f(settings.autoGainControl));
+}
+
+// ---- Phase 1: microphone constraints ----
+
+async function acquirePass(label, audioConstraints) {
+  try {
+    log("getUserMedia(" + label + ") requesting audio: " + JSON.stringify({ audio: audioConstraints }));
+    var stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+    var track = stream.getTracks()[0];
+    var settings = track.getSettings();
+    log(label + " OK. track.label=" + JSON.stringify(track.label));
+    log(label + " track.getSettings(): " + JSON.stringify(settings, null, 0));
+    return { stream: stream, settings: settings };
+  } catch (e) {
+    reportErr("getUserMedia(" + label + ")", e);
+    if (e && e.name === "OverconstrainedError") {
+      log("OverconstrainedError detail: failing constraint=" + JSON.stringify(e.constraint) +
+        "; requested=" + JSON.stringify({ audio: audioConstraints }));
+    }
+    return null;
+  }
+}
+
+// ---- Phases 3-5 shared chunk handler (mirrors app.js node.port.onmessage) ----
+
+function onPcmChunk(e) {
+  try {
+    var chunk = e.data;
+    // Metering accumulators on the delivered mono PCM.
+    for (var i = 0; i < chunk.length; i++) {
+      var v = chunk[i];
+      state.sumSq += v * v;
+      var a = v < 0 ? -v : v;
+      if (a > state.peakLin) state.peakLin = a;
+    }
+    state.samples += chunk.length;
+
+    // Production path: resample -> fingerprint -> SFP1 batch.
+    var pcm = state.resampler.process(chunk);
+    if (pcm.length === 0) return;
+    var batch = state.engine.process(pcm);
+    if (!batch || !(batch.length > 16)) return;
+
+    // Header sanity once: magic "SFP1", sample rate at bytes 8..12 LE.
+    if (!state.headerLogged) {
+      state.headerLogged = true;
+      var magic = String.fromCharCode(batch[0], batch[1], batch[2], batch[3]);
+      var sr = new DataView(batch.buffer, batch.byteOffset + 8, 4).getUint32(0, true);
+      log("first batch: magic=" + magic + " sample_rate=" + sr + " Hz bytes=" + batch.length);
+    }
+
+    // app.js verbatim count parse: u32 LE at byte offset 12.
+    var n = new DataView(batch.buffer, batch.byteOffset + 12, 4).getUint32(0, true);
+    state.batches += 1;
+    state.fpCount += n;
+    state.fpBytes += batch.length;
+    if (state.tpWinStart === null) state.tpWinStart = performance.now();
+
+    if (state.ws && state.ws.readyState === 1) {
+      state.ws.send(batch);
+    }
+  } catch (err) {
+    reportErr("pcm chunk handler", err);
+  }
+}
+
+// ---- Meter tick (~4x/s) ----
+
+function meterTick() {
+  try {
+    var rms = state.samples > 0 ? Math.sqrt(state.sumSq / state.samples) : 0;
+    var dbfs = rms > 0 ? 20 * Math.log10(rms) : -100;
+    if (dbfs < -100) dbfs = -100;
+    state.rmsDbfs = dbfs;
+    state.sumSq = 0;
+    state.samples = 0;
+
+    var pdb = state.peakLin > 0 ? 20 * Math.log10(state.peakLin) : -100;
+    if (pdb < -100) pdb = -100;
+    state.peakDbfs = pdb;
+
+    var el = $("sum-rms");
+    el.textContent = fmtDb(dbfs);
+    colorize(el, dbfs);
+    setText("sum-peak", fmtDb(pdb));
+
+    if (state.meterArmed) {
+      var secs = Math.floor((performance.now() - state.meterStart) / 1000);
+      if (secs !== state.lastWholeSecond) {
+        state.lastWholeSecond = secs;
+        log("meter t=" + secs + "s rms=" + fmtDb(dbfs) +
+          " batches=" + state.batches + " fps=" + state.fpCount);
+      }
+      if ((performance.now() - state.meterStart) >= METER_WINDOW_MS) {
+        state.meterArmed = false;
+        finishThroughputWindow();
+      }
+    }
+  } catch (err) {
+    reportErr("meter tick", err);
+  }
+}
+
+function finishThroughputWindow() {
+  try {
+    var end = performance.now();
+    var start = state.tpWinStart !== null ? state.tpWinStart : state.meterStart;
+    var elapsed = Math.max((end - start) / 1000, 1e-6);
+    if (state.batches === 0) {
+      log("throughput: NO BATCHES produced in " + (METER_WINDOW_MS / 1000) +
+        "s window. Input silent, or worklet starved (see errors above).");
+      setText("sum-throughput", "0 batches");
+      setBadge("check", "CHECK");
+      return;
+    }
+    var bps = state.batches / elapsed;
+    var fpsPerSec = state.fpCount / elapsed;
+    var bytesPerSec = state.fpBytes / elapsed;
+    var verdict = fpsPerSec >= 10 ? "PASS" : "CHECK";
+    log("throughput over " + elapsed.toFixed(2) + "s (measured from first batch):");
+    log("  batches/s = " + bps.toFixed(1) + ", fingerprints/s = " + fpsPerSec.toFixed(1) +
+      ", bytes/s = " + Math.round(bytesPerSec));
+    log("  verdict: " + verdict + (verdict === "PASS"
+      ? " (>= 10 fps/s sustained)"
+      : " (below 10 fps/s sustained - capture pipeline underpowered or starved)"));
+    setText("sum-throughput",
+      fpsPerSec.toFixed(1) + " fps/s, " + bps.toFixed(1) + " bat/s, " +
+      Math.round(bytesPerSec / 1024) + " KiB/s");
+    setBadge(verdict === "PASS" ? "pass" : "check", verdict);
+  } catch (err) {
+    reportErr("throughput window", err);
+  }
+}
+
+// ---- Phase 5: round trip ----
+
+function makeRoundTrip(sessionId) {
+  return new Promise(function (resolve) {
+    var settled = false;
+    var finish = function (why) {
+      if (settled) return;
+      settled = true;
+      if (state.rtTimer) { clearTimeout(state.rtTimer); state.rtTimer = null; }
+      log("round-trip finished: " + why);
+      try {
+        if (state.ws && state.ws.readyState <= 1) state.ws.close();
+      } catch (e) { reportErr("ws.close", e); }
+      resolve();
+    };
+    var wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") +
+      location.host + "/v1/identify/" + sessionId;
+    log("opening WebSocket " + wsUrl);
+    var ws;
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (e) {
+      reportErr("WebSocket constructor", e);
+      resolve();
+      return;
+    }
+    state.ws = ws;
+    ws.binaryType = "arraybuffer";
+    ws.onopen = function () { log("ws open (readyState=1), streaming batches"); };
+    ws.onmessage = function (m) {
+      try {
+        var ev = JSON.parse(m.data);
+        state.lastWsEvent = JSON.stringify(ev);
+        setText("sum-ws", state.lastWsEvent);
+        log("ws << " + state.lastWsEvent);
+        if (ev.event === "matched" || ev.event === "no_match" || ev.event === "error") {
+          finish("terminal event '" + ev.event + "'");
+        }
+      } catch (e) {
+        reportErr("ws message parse", e);
+        log("ws << (unparseable) " + String(m.data).slice(0, 400));
+      }
+    };
+    ws.onerror = function () { log("[ERROR] websocket error event fired"); };
+    ws.onclose = function (evc) {
+      log("ws closed (code=" + evc.code + " reason=" + JSON.stringify(evc.reason || "") + ")");
+      if (state.ws === ws) state.ws = null;
+      finish("socket closed");
+    };
+    state.rtTimer = setTimeout(function () {
+      log("round-trip time limit reached (" + (ROUND_TRIP_LIMIT_MS / 1000) + " s)");
+      finish("time limit");
+    }, ROUND_TRIP_LIMIT_MS);
+  });
+}
+
+// ---- Cleanup ----
+
+async function cleanup() {
+  if (state.meterTimer) { clearInterval(state.meterTimer); state.meterTimer = null; }
+  if (state.rtTimer) { clearTimeout(state.rtTimer); state.rtTimer = null; }
+  if (state.ws) { try { state.ws.close(); } catch (e) {} state.ws = null; }
+  if (state.chosenStream) {
+    try {
+      var tracks = state.chosenStream.getTracks();
+      for (var i = 0; i < tracks.length; i++) tracks[i].stop();
+    } catch (e) { reportErr("stream stop", e); }
+    state.chosenStream = null;
+  }
+  if (state.ctx) { try { await state.ctx.close(); } catch (e) {} state.ctx = null; }
+  if (state.engine) { try { state.engine.free(); } catch (e) {} state.engine = null; }
+  state.node = null; state.src = null; state.resampler = null;
+}
+
+// ---- Main run ----
+
+async function runDiagnostics() {
+  state.running = true;
+  $("btn-start").disabled = true;
+  log("diagnostics run started " + new Date().toISOString());
+  log("user agent: " + navigator.userAgent);
+
+  // PHASE 1: constraints comparison -------------------------------------------------
+  banner("PHASE 1/5 - MICROPHONE CONSTRAINT COMPARISON");
+  var passA = await acquirePass("pass A (app constraints)", APP_AUDIO);
+  // The relaxed comparison set is currently identical to the app's own
+  // constraints (apps/web/app.js already disables EC/NS/AGC); both passes
+  // are still run and reported verbatim as specified.
+  var passB = await acquirePass("pass B (relaxed)", RELAXED_AUDIO);
+
+  if (passA) {
+    state.chosenStream = passA.stream;
+    state.chosenLabel = "pass A (app constraints)";
+  } else if (passB) {
+    state.chosenStream = passB.stream;
+    state.chosenLabel = "pass B (relaxed, fallback)";
+  }
+  if (passB && passB.stream !== state.chosenStream) {
+    try {
+      var tb = passB.stream.getTracks();
+      for (var i = 0; i < tb.length; i++) tb[i].stop();
+      log("pass B track stopped (not selected)");
+    } catch (e) { reportErr("pass B stop", e); }
+  }
+  if (!state.chosenStream) {
+    throw new Error("no microphone stream available from either getUserMedia pass");
+  }
+  log("selected stream: " + state.chosenLabel);
+  var chosenTrack = state.chosenStream.getTracks()[0];
+  var chosenSettings = chosenTrack.getSettings();
+  updateConstraints(chosenSettings);
+  updateChain(chosenSettings.sampleRate);
+
+  // PHASE 2: unforced AudioContext probe --------------------------------------------
+  banner("PHASE 2/5 - AUDIO CONTEXT PROBE (no forced sampleRate)");
+  try {
+    state.probeCtx = new AudioContext();
+    log("probe context created (constructor without sampleRate argument)");
+    await state.probeCtx.resume();
+    log("probe context: sampleRate=" + state.probeCtx.sampleRate +
+      " Hz, baseLatency=" + state.probeCtx.baseLatency +
+      " s, outputLatency=" + state.probeCtx.outputLatency +
+      " s, state=" + state.probeCtx.state);
+    await state.probeCtx.close();
+    log("probe context closed");
+  } catch (e) {
+    reportErr("probe AudioContext", e);
+  } finally {
+    state.probeCtx = null;
+  }
+
+  // PHASE 3: production engine path (mirrors app.js) ---------------------------------
+  banner("PHASE 3/5 - PRODUCTION ENGINE PATH (mirrors apps/web/app.js)");
+  var mod = await import("/wasm/sivana_wasm.js");
+  await mod.default();
+  log("wasm glue loaded: /wasm/sivana_wasm.js");
+
+  state.ctx = new AudioContext({ sampleRate: FINGERPRINT_SAMPLE_RATE });
+  await state.ctx.resume();
+  log("production context: sampleRate=" + state.ctx.sampleRate +
+    " Hz (requested " + FINGERPRINT_SAMPLE_RATE + "), baseLatency=" +
+    state.ctx.baseLatency + " s, state=" + state.ctx.state);
+  state.resampler = new StreamingLinearResampler(
+    state.ctx.sampleRate,
+    FINGERPRINT_SAMPLE_RATE,
+  );
+  log("resampler: " + state.ctx.sampleRate + " Hz -> " + FINGERPRINT_SAMPLE_RATE +
+    " Hz (step=" + state.resampler.step + ")");
+  state.engine = new mod.WasmFingerprinter(FINGERPRINT_SAMPLE_RATE);
+  var engVer = "?";
+  try { engVer = state.engine.version(); } catch (e) { reportErr("engine.version()", e); }
+  log("engine: " + engVer);
+  setText("sum-engine", engVer);
+  updateChain(chosenSettings.sampleRate);
+
+  await state.ctx.audioWorklet.addModule("/wasm/pcm-worklet.js");
+  state.node = new AudioWorkletNode(state.ctx, "sivana-pcm-capture");
+  state.node.port.onmessage = onPcmChunk;
+  state.src = state.ctx.createMediaStreamSource(state.chosenStream);
+  state.src.connect(state.node);
+  // The worklet only taps audio; give it a path to destination (muted)
+  // or Chrome will never pull its process() callback and no batches flow.
+  var mute = state.ctx.createGain();
+  mute.gain.value = 0;
+  state.node.connect(mute);
+  mute.connect(state.ctx.destination);
+  log("worklet wired: source -> sivana-pcm-capture -> muted gain -> destination");
+
+  // PHASE 4: meters + fingerprint throughput (8 s) ------------------------------------
+  banner("PHASE 4/5 - INPUT METERS + FINGERPRINT THROUGHPUT (8 s)");
+  log("speak or play music near the microphone now; batches are counted locally (not sent).");
+  state.meterStart = performance.now();
+  state.meterArmed = true;
+  state.lastWholeSecond = -1;
+  state.meterTimer = setInterval(meterTick, METER_INTERVAL_MS);
+  await new Promise(function (resolve) { setTimeout(resolve, METER_WINDOW_MS + 150); });
+
+  // PHASE 5: server round trip ---------------------------------------------------------
+  banner("PHASE 5/5 - SERVER ROUND TRIP (POST /v1/sessions, WS /v1/identify)");
+  var resp = await fetch("/v1/sessions", { method: "POST" });
+  state.sessionHttpStatus = resp.status;
+  setText("sum-http", "HTTP " + resp.status + (resp.ok ? " (ok)" : " (NOT ok)"));
+  log("POST /v1/sessions -> HTTP " + resp.status);
+  var bodyText = await resp.text();
+  log("response body: " + bodyText.slice(0, 500));
+  if (!resp.ok) {
+    throw new Error("recognition service returned HTTP " + resp.status + ": " + bodyText.slice(0, 200));
+  }
+  var sessionJson;
+  try { sessionJson = JSON.parse(bodyText); } catch (e) {
+    reportErr("session JSON parse", e);
+    throw e;
+  }
+  log("session_id = " + sessionJson.session_id);
+
+  await makeRoundTrip(sessionJson.session_id);
+}
+
+async function startClick() {
+  if (state.running) return;
+  try {
+    await runDiagnostics();
+    banner("SUMMARY");
+    log("sample-rate chain : " + $("sum-chain").textContent);
+    log("processing        : " + $("sum-constraints").textContent);
+    log("rms level         : " + fmtDb(state.rmsDbfs));
+    log("peak hold         : " + fmtDb(state.peakDbfs));
+    log("fingerprints      : " + $("sum-throughput").textContent);
+    log("throughput badge  : " + $("sum-badge").textContent);
+    log("session http      : " + (state.sessionHttpStatus !== null ? state.sessionHttpStatus : "n/a"));
+    log("last ws event     : " + (state.lastWsEvent !== null ? state.lastWsEvent : "none received"));
+    log("");
+    log("done. press Copy log and paste the entire output back to support.");
+  } catch (e) {
+    reportErr("diagnostics run", e);
+    banner("SUMMARY (RUN FAILED)");
+    log("the run aborted with the error above; everything up to the failure is in this log.");
+  } finally {
+    await cleanup();
+    state.running = false;
+    $("btn-start").disabled = false;
+    if (state.rmsDbfs !== null) {
+      var el = $("sum-rms");
+      el.textContent = fmtDb(state.rmsDbfs) + " (final)";
+      colorize(el, state.rmsDbfs);
+    }
+  }
+}
+
+// ---- Global error surface: nothing fails silently ----
+
+window.addEventListener("error", function (ev) {
+  reportErr("window.onerror", ev.error || ev.message || "unknown");
+});
+window.addEventListener("unhandledrejection", function (ev) {
+  var r = ev.reason;
+  reportErr("unhandled promise rejection", r && r.message ? r : String(r));
+});
+
+$("btn-start").addEventListener("click", function () { void startClick(); });
+
+$("btn-copy").addEventListener("click", async function () {
+  var text = $("log").textContent;
+  var btn = $("btn-copy");
+  try {
+    await navigator.clipboard.writeText(text);
+    log("log copied to clipboard (" + text.length + " chars)");
+    btn.textContent = "Copied";
+  } catch (e) {
+    reportErr("clipboard write", e);
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (ok) { log("log copied via fallback (execCommand)"); btn.textContent = "Copied"; }
+      else { log("copy failed: select the log text manually."); }
+    } catch (e2) {
+      reportErr("clipboard fallback", e2);
+      log("copy failed: select the log text manually.");
+    }
+  }
+  setTimeout(function () { btn.textContent = "Copy log"; }, 1600);
+});
+
+log("page loaded. press Start diagnostics, then play music near the microphone.");
+</script>
+</body>
+</html>

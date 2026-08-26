@@ -46,6 +46,12 @@ pub struct CaseResult {
     pub score_weight: Option<f32>,
     pub offset_concentration: Option<f32>,
     pub margin_over_next: Option<f32>,
+    // Robustness-contract verifier features (unique aligned occurrences,
+    // matched query-time span, mean inlier rarity). Recorded for every
+    // case so the calibration sweep can weigh them.
+    pub unique_aligned: Option<usize>,
+    pub query_span_frames: Option<u32>,
+    pub mean_rarity: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +62,10 @@ pub struct RejectionCase {
     pub best_inliers: Option<usize>,
     pub best_concentration: Option<f32>,
     pub best_margin: Option<f32>,
+    // Verifier features on the strongest (wrong) candidate.
+    pub best_unique_aligned: Option<usize>,
+    pub best_query_span_frames: Option<u32>,
+    pub best_mean_rarity: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -284,6 +294,9 @@ pub fn run_baseline(
                     score_weight: None,
                     offset_concentration: None,
                     margin_over_next: None,
+                    unique_aligned: None,
+                    query_span_frames: None,
+                    mean_rarity: None,
                 });
                 case_id += 1;
             }
@@ -310,6 +323,9 @@ pub fn run_baseline(
             best_inliers: None,
             best_concentration: None,
             best_margin: None,
+            best_unique_aligned: None,
+            best_query_span_frames: None,
+            best_mean_rarity: None,
         });
     }
 
@@ -485,6 +501,9 @@ pub fn run_landmark_v2(
                     score_weight: best.map(|o| o.weighted_score),
                     offset_concentration: best.map(|o| o.offset_concentration),
                     margin_over_next: best.map(|o| o.margin_over_next),
+                    unique_aligned: best.map(|o| o.unique_aligned),
+                    query_span_frames: best.map(|o| o.query_span_frames),
+                    mean_rarity: best.map(|o| o.mean_rarity),
                 });
                 case_id += 1;
             }
@@ -517,6 +536,9 @@ pub fn run_landmark_v2(
             best_inliers: outcomes.first().map(|o| o.inliers),
             best_concentration: outcomes.first().map(|o| o.offset_concentration),
             best_margin: outcomes.first().map(|o| o.margin_over_next),
+            best_unique_aligned: outcomes.first().map(|o| o.unique_aligned),
+            best_query_span_frames: outcomes.first().map(|o| o.query_span_frames),
+            best_mean_rarity: outcomes.first().map(|o| o.mean_rarity),
         });
     }
 
@@ -661,6 +683,9 @@ pub fn run_invariant_b1(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary
                     score_weight: best.map(|o| o.pairs as f32),
                     offset_concentration: best.map(|o| o.time_scale),
                     margin_over_next: best.map(|o| o.residual),
+                    unique_aligned: None,
+                    query_span_frames: None,
+                    mean_rarity: None,
                 });
                 case_id += 1;
             }
@@ -684,6 +709,9 @@ pub fn run_invariant_b1(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary
             best_inliers: outcomes.first().map(|o| o.inliers),
             best_concentration: outcomes.first().map(|o| o.time_scale),
             best_margin: outcomes.first().map(|o| o.residual),
+            best_unique_aligned: None,
+            best_query_span_frames: None,
+            best_mean_rarity: None,
         });
     }
 
@@ -700,6 +728,157 @@ pub fn run_invariant_b1(corpus: &Corpus, grid: &GridConfig) -> Result<RunSummary
         cases,
         rejection_cases,
     })
+}
+
+/// E9 result for one B1 lever configuration.
+#[derive(Debug, Clone, Serialize)]
+pub struct E9Variant {
+    pub name: String,
+    /// In-catalog rank-1 identity hits / total cases.
+    pub recall_track: f64,
+    /// Out-of-catalog probes accepted at the E5 gate (inliers >= 210).
+    pub false_accepts_210: usize,
+    pub rejection_cases: usize,
+    /// Best (max) inlier evidence any rejection probe amassed — how far
+    /// wrong audio climbs toward the gate.
+    pub max_rejection_inliers: usize,
+    /// Median inliers across true matches (evidence of genuine alignment).
+    pub median_match_inliers: f64,
+}
+
+/// E9: B1 discriminativity levers on a larger catalog.
+///
+/// Runs the triplet engine under four configurations — E5 baseline,
+/// df-weighted candidate ranking, per-band frequency pre-quantization,
+/// and both levers combined — over one shared corpus, then reports recall
+/// plus how far out-of-catalog evidence climbs under each variant. The
+/// Phase 7 decision (promote a fixed B1 or close it) is made from this
+/// table; see research/EXPERIMENTS.md E9.
+pub fn run_e9_b1_levers(
+    n_tracks: usize,
+    duration_s: f32,
+    sample_rate: u32,
+    seed: u64,
+) -> Result<Vec<E9Variant>, String> {
+    use sivana_invariant::{TripletsConfig, fingerprint_triplets, query_affine_weighted};
+
+    let cfg = AlgorithmConfig::legacy();
+    let corpus = corpus::generate(n_tracks, duration_s, sample_rate, seed);
+    let excerpt_seconds = 8.0_f32;
+    let positions_per_track = 2usize;
+
+    // Degradation set focused on the B1-owned failure classes plus clean
+    // and pink-noise references (E5 grid subset).
+    let degs = [
+        Degradation::None,
+        Degradation::PinkNoise { snr_db: 10.0 },
+        Degradation::Speed { factor: 0.90 },
+        Degradation::PitchShift { semitones: 2.0 },
+        Degradation::TimeStretch { factor: 1.10 },
+    ];
+
+    let variants: [(&str, TripletsConfig, bool); 4] = [
+        ("b1-e5-baseline", TripletsConfig::default(), false),
+        ("b1-df-weighted", TripletsConfig::default(), true),
+        (
+            "b1-quantized",
+            TripletsConfig {
+                quant_band_power: 2,
+                ..Default::default()
+            },
+            false,
+        ),
+        (
+            "b1-both-levers",
+            TripletsConfig {
+                quant_band_power: 2,
+                ..Default::default()
+            },
+            true,
+        ),
+    ];
+
+    let mut results = Vec::new();
+    for (name, tcfg, df_weighted) in variants {
+        let mut index = sivana_match::InMemoryIndex::new();
+        for t in &corpus.tracks {
+            let peaks = detect_peaks(&t.samples, sample_rate, &cfg);
+            let fps = fingerprint_triplets(&peaks, &tcfg);
+            index.add_recording(
+                t.recording,
+                &fps.iter().map(|f| (f.hash, f.t1)).collect::<Vec<_>>(),
+            );
+        }
+        index.finalize();
+
+        let mut hits = 0usize;
+        let mut total = 0usize;
+        let mut match_inliers: Vec<usize> = Vec::new();
+        let mut case_id = 0usize;
+
+        for (ti, track) in corpus.tracks.iter().enumerate() {
+            for pos_i in 0..positions_per_track {
+                let mut rng = XorShift64Star::new(seed ^ 0x51E5).derive((ti * 977 + pos_i) as u64);
+                let max_start = (duration_s - excerpt_seconds - 0.1).max(0.0);
+                let start_s = rng.next_f32() * max_start;
+                let clean =
+                    fixtures::excerpt(&track.samples, sample_rate, start_s, excerpt_seconds);
+                for deg in &degs {
+                    let query = deg.apply(&clean, sample_rate, case_id as u64);
+                    case_id += 1;
+                    let qpeaks = detect_peaks(&query, sample_rate, &cfg);
+                    let qfps = fingerprint_triplets(&qpeaks, &tcfg);
+                    let outcomes = query_affine_weighted(&index, &qfps, 3, df_weighted);
+                    total += 1;
+                    if let Some(best) = outcomes.first()
+                        && best.recording == track.recording
+                    {
+                        hits += 1;
+                        match_inliers.push(best.inliers);
+                    }
+                }
+            }
+        }
+
+        // Out-of-catalog probes: held-out songs never indexed.
+        let mut fa_210 = 0usize;
+        let mut rej_inliers: Vec<usize> = Vec::new();
+        for k in 0..5u64 {
+            let held_seed = seed ^ 0xDEAD_BEEF ^ k.wrapping_mul(0xA5A5_5A5A);
+            let held = fixtures::synth_song(held_seed, excerpt_seconds + 2.0, sample_rate);
+            for (di, deg) in degs.iter().enumerate() {
+                let query = deg.apply(&held, sample_rate, 0xC0FFEE + di as u64);
+                let qpeaks = detect_peaks(&query, sample_rate, &cfg);
+                let qfps = fingerprint_triplets(&qpeaks, &tcfg);
+                let outcomes = query_affine_weighted(&index, &qfps, 3, df_weighted);
+                if let Some(best) = outcomes.first() {
+                    rej_inliers.push(best.inliers);
+                    if best.inliers >= 210 {
+                        fa_210 += 1;
+                    }
+                }
+            }
+        }
+        rej_inliers.sort_unstable();
+        match_inliers.sort_unstable();
+
+        results.push(E9Variant {
+            name: name.into(),
+            recall_track: if total == 0 {
+                0.0
+            } else {
+                hits as f64 / total as f64
+            },
+            false_accepts_210: fa_210,
+            rejection_cases: rej_inliers.len(),
+            max_rejection_inliers: rej_inliers.last().copied().unwrap_or(0),
+            median_match_inliers: match_inliers
+                .get(match_inliers.len() / 2)
+                .copied()
+                .unwrap_or(0) as f64,
+        });
+    }
+    Ok(results)
 }
 
 #[cfg(test)]

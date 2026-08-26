@@ -7,3 +7,9 @@ description = "Sivana Landmark Engine V2: scored target zones and 32-bit pair fi
 [dependencies]
 sivana-core = { path = "../sivana-core" }
 sivana-dsp = { path = "../sivana-dsp" }
+
+[dev-dependencies]
+sivana-audio = { path = "../sivana-audio" }
+sivana-bench = { path = "../sivana-bench" }
+sivana-ingest = { path = "../sivana-ingest" }
+sivana-match = { path = "../sivana-match" }

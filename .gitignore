@@ -31,3 +31,10 @@ test/
 # benchmark outputs
 bench-work/
 apps/web/test-*.mp3
+
+# runtime catalog (user data; lives next to the server by default)
+catalog/
+
+# local tooling artifacts
+graphify-out/
+screenshots/

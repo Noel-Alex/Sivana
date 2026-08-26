@@ -144,7 +144,7 @@ impl AlgorithmConfig {
     /// Sanity-check a configuration before use.
     pub fn validate(&self) -> Result<(), String> {
         if !BENCHMARK_SAMPLE_RATES_HZ.contains(&self.sample_rate_hz)
-            && self.sample_rate_hz % 1000 != 0
+            && !self.sample_rate_hz.is_multiple_of(1000)
         {
             return Err(format!(
                 "unusual sample rate {} Hz; use one of {BENCHMARK_SAMPLE_RATES_HZ:?} or a kHz multiple",
@@ -159,10 +159,10 @@ impl AlgorithmConfig {
         if self.fft.hop_size == 0 || self.fft.hop_size > self.fft.window_size {
             return Err("fft.hop_size must be in (0, window_size]".to_string());
         }
-        if let Some(d) = self.peaks.density_peaks_per_second {
-            if !(1.0..=200.0).contains(&d) {
-                return Err("density_peaks_per_second outside plausible range 1..=200".to_string());
-            }
+        if let Some(d) = self.peaks.density_peaks_per_second
+            && !(1.0..=200.0).contains(&d)
+        {
+            return Err("density_peaks_per_second outside plausible range 1..=200".to_string());
         }
         if let Some(q) = &self.peaks.band_quotas {
             let sum: f32 = q.iter().sum();
